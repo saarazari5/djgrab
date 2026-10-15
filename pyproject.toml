@@ -1,0 +1,19 @@
+[project]
+name = "djgrab"
+version = "0.1.0"
+description = "Personal lossy downloads for tracks you keep"
+requires-python = ">=3.11"
+dependencies = ["aioslsk"]
+
+[project.optional-dependencies]
+dev = ["pytest", "numpy"]
+
+[project.scripts]
+djgrab = "djgrab.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

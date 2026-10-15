@@ -1,0 +1,23 @@
+[download]
+enabled = true
+sources = ["youtube", "soundcloud"]
+format = "m4a"
+bitrate = "256k"
+trim_s = 2
+singles = "auto_keepers"
+fallback_to_buylist = true
+
+[library]
+fallback_genre = "Unknown"
+
+[library.genres]
+pop = "Pop"
+"dance pop" = "Pop"
+
+[spotify]
+client_id = ""
+client_secret = ""
+
+[soulseek]
+username = ""
+password = ""
