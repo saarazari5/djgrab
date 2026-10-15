@@ -1,6 +1,6 @@
 # djgrab
 
-Paste a link. Get one audio file per song.
+get downloads from any streaming platform, for free
 
 ```text
 ~/djgrab/{genre}/{artist} - {title}.m4a
