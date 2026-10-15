@@ -1,179 +1,139 @@
 # djgrab
 
-Personal downloader for tracks you already decided to keep. You give it a name, a Spotify link, a playlist, or one long DJ-set video. It searches YouTube and SoundCloud, and Soulseek when you configure it, then files one audio file per song.
-
-Songs are saved in your home folder:
+Download a song from a link. The file lands in your home folder:
 
 ```text
 ~/djgrab/{genre}/{artist} - {title}.m4a
 ```
 
-The database and temporary downloads stay in `data/` inside this project. `djgrab clear` deletes only the database. The audio files stay.
-
-Rekordbox does not copy a file when you drag it in from `~/djgrab/`. It remembers that path. Deleting the folder makes those tracks missing in Rekordbox.
+You are responsible for what you download. djgrab does not unlock Spotify audio or SoundCloud Go+.
 
 ## Install
 
-You need Python 3.11+, [uv](https://docs.astral.sh/uv/), `yt-dlp`, and `ffmpeg`.
+There is no `brew install djgrab`. Homebrew installs the three programs djgrab runs on. uv then installs the `djgrab` command.
+
+On a Mac:
+
+```bash
+brew install uv yt-dlp ffmpeg
+uv tool install git+https://github.com/saarazari5/djgrab
+djgrab doctor
+```
+
+`doctor` exits with an error when `yt-dlp` or `ffmpeg` is missing. Quote URLs in zsh so `?` is not treated as a pattern.
+
+```bash
+djgrab "https://www.youtube.com/watch?v=..."
+```
+
+The song is saved under `~/djgrab/`. The database and temporary files are in `~/.djgrab/`. No account is required for YouTube or SoundCloud.
+
+To install a newer copy later:
+
+```bash
+uv tool upgrade djgrab
+```
+
+On Linux, install `ffmpeg` with your package manager and install [uv](https://docs.astral.sh/uv/getting-started/installation/) and `yt-dlp`, then run the same `uv tool install` line.
+
+To work on the code instead of installing the command:
 
 ```bash
 uv sync --extra dev
+uv run pytest
 uv run djgrab doctor
 ```
-
-`doctor` exits with an error when `yt-dlp` or `ffmpeg` is missing. `flac` and `fpcalc` are reported and are not used.
-
-## Configure
-
-```bash
-cp djgrab.example.toml djgrab.toml
-```
-
-`djgrab.toml` is gitignored. Put your own values there. Nothing in this repository contains a Spotify secret or a Soulseek password.
-
-`SPOTIFY_CLIENT_ID` and `SPOTIFY_CLIENT_SECRET` override the file when they are set. An empty environment variable does not override a value in the file.
-
-### Download
-
-| Key | Meaning |
-| --- | --- |
-| `enabled` | `false` stops every download and names `enabled` in the error |
-| `sources` | `youtube` and `soundcloud` |
-| `format` | `m4a` or `mp3` |
-| `bitrate` | audio bitrate, default `256k` |
-| `trim_s` | seconds cut off each end of a hand-written set timeline |
-| `singles` | `auto_keepers` downloads when you `keep` a track. `on_demand` only marks it |
-| `fallback_to_buylist` | a miss or a hard failure goes to the buy list |
-
-### Library
-
-| Key | Meaning |
-| --- | --- |
-| `fallback_genre` | folder used when no genre is found. Default `Unknown` |
-| `genres` | map a Spotify genre string to a folder name, ignoring case |
-
-Example: `"dance pop" = "Pop"` files that genre under `Pop/`.
-
-### Spotify
-
-The Spotify link is never the audio. Spotify audio is locked. djgrab reads the public title, artist, and duration, then searches elsewhere.
-
-Create an app at the Spotify developer dashboard with the Web API enabled. Put the client id and client secret in `djgrab.toml`. Those credentials are used for two things:
-
-- The artist's first genre, from the artist page or the artist API.
-- A search by artist name when a track is filed with a blank genre, including songs named in a DJ set.
-
-Empty credentials leave the genre blank, and the file goes to `fallback_genre`.
-
-### Soulseek
-
-Set both `username` and `password`. The account has to exist in the Soulseek app first. Empty fields skip Soulseek.
-
-Soulseek is searched at the same time as YouTube and SoundCloud. A lossless file (flac, wav, aiff) that matches is preferred. One login is reused for the process. Sharing a folder is a Soulseek app prompt, not something djgrab asks for. Point the Soulseek app at `~/djgrab/` if you choose to share.
-
-YouTube and SoundCloud need no account.
 
 ## Commands
 
-Run these from the project directory.
-
 ```bash
-uv run djgrab doctor
-uv run djgrab add --artist "Nova Ridge" --title "Solar Drift" --mix "Original Mix" --duration 180
-uv run djgrab keep 1
-uv run djgrab grab 1
-uv run djgrab grab "https://open.spotify.com/track/..."
-uv run djgrab playlist "https://soundcloud.com/..."
-uv run djgrab playlist "https://open.spotify.com/playlist/..."
-uv run djgrab set "https://www.youtube.com/watch?v=..."
-uv run djgrab cut "https://www.youtube.com/watch?v=..." timeline.json
-uv run djgrab clear
+djgrab doctor
+djgrab "https://www.youtube.com/watch?v=..."
+djgrab "https://soundcloud.com/artist/track"
+djgrab "https://soundcloud.com/artist/sets/..."
+djgrab "https://open.spotify.com/track/..."
+djgrab "https://open.spotify.com/playlist/..."
+djgrab clear
 ```
 
-`--config` and `--data` go after the subcommand. `--data somewhere` stores the database in `somewhere/` and the songs in `somewhere/djgrab/`. `DJGRAB_DATA` does the same.
+`--config` and `--data` can go before or after the link. A word that is not `doctor`, `clear`, or a URL is refused.
 
-The last line of a command is `status: message`. Exit code 1 means the job failed. Exit code 2 means the command itself was refused, such as a missing track or a video with no tracklist.
+Songs are saved in `~/djgrab/`. The database and temporary files are in `~/.djgrab/`. `--data somewhere` stores the database in `somewhere/` and the songs in `somewhere/djgrab/`. `DJGRAB_DATA` does the same.
 
-### One song
+`djgrab clear` deletes `~/.djgrab/djgrab.sqlite`. The audio files stay. After a clear, djgrab no longer knows which songs were already downloaded, so the next link fetches them again.
 
-`add` stores a track and prints its id. `keep` marks it as a keeper. With `singles = "auto_keepers"` that also downloads it.
+The last line of a download is `status: message`. Exit code 1 means that download failed. Exit code 2 means the link was refused.
 
-`grab` takes a track id, a job id, or a Spotify track URL. A Spotify URL is looked up, stored, and then searched. A free URL stored on the track is filed as-is and is not searched.
+## What a link does
 
-A song that is already filed with the same artist, title, and mix is kept. The search does not run again. A different mix is a different song. If the file has been deleted from disk, it is downloaded again.
+A YouTube or SoundCloud page that names one recording is downloaded from that URL.
 
-### Playlists
+A YouTube or SoundCloud playlist, including a SoundCloud URL with `/sets/`, downloads each recording from its own URL. One failure does not stop the rest.
 
-A YouTube or SoundCloud playlist is a list of separate videos. Each URL is downloaded whole. There is no search and no cutting. One failure does not stop the rest.
+A Spotify track or playlist is only a list of names. Spotify audio is locked. djgrab reads the public title, artist, and duration, then searches YouTube and SoundCloud.
 
-A Spotify playlist is a list of names. Each track is stored and searched the same way as `grab` on a Spotify track URL.
+One video is a DJ set when the page names at least two songs. Those songs are searched and downloaded one by one. The mix itself is not saved. A video that names no songs is downloaded as that one file.
 
-### DJ sets
+Names are read from YouTube chapters, then timestamp lines in the description, then `Artist - Title` lines, then the first comment that lists at least two timestamps. Bracket notes such as `[ Unreleased ]` are dropped.
 
-`djgrab set` treats one video as a tracklist, then downloads each song on its own. It does not save the mix and it does not cut slices out of it.
+A song already filed with the same artist, title, and mix is kept. A different mix is a different song. If the file has been deleted, it is downloaded again.
 
-It reads names in this order:
+## Search
 
-1. YouTube chapters.
-2. Timestamp lines in the description, such as `12:34 Artist - Title` or `1:02:03 Artist - Title`.
-3. Description lines like `Artist - Title` when there are no timestamps.
-4. The first of 100 comments that contains at least two timestamp lines.
+The query is the artist and title with these words removed: remaster, remastered, official, audio, video, lyric, lyrics, hd, hq, and a 4-digit year.
 
-Bracket notes such as `[ Unreleased ]` are dropped. If none of those sources name at least two songs, the command stops with `video has no tracklist` and does not search.
+A candidate is usable when every title word is in its title and every artist word is in its artist. When the track has a length, the candidate must be within 15 seconds. A DJ-set song has no length, so that check is skipped. When the track has a mix, the candidate's trailing parenthetical must be that mix.
 
-The time a song plays inside the mix is not stored as its length, because a DJ does not play the studio recording for the same number of seconds. Matching then uses the artist and title.
+Ranking: a lossless Soulseek file, then the closest length, then fewer extra title words, then an uploader that matches the artist.
 
-`djgrab cut` is the other path. You pass a JSON list you already wrote:
+DRM, unavailable, and private errors try the next file. A Soulseek user who never sends the file is skipped and the next file is tried. Nothing usable is reported as `buylist`.
 
-```json
-[{ "start_s": 0, "end_s": 180, "track_id": 1 }]
+YouTube and SoundCloud downloads are AAC in m4a at 256 kbps and are marked lossy. A Soulseek flac, wav, or aiff that matches is filed as lossless. The source picture is embedded when the site provides one. A missing picture does not stop the download.
+
+Genre comes from an iTunes artist search. The folder is `library.genres` when that genre is listed, otherwise the genre text. No genre uses `fallback_genre` (`Unknown`).
+
+## Configure
+
+You can skip this. With no config file, YouTube and SoundCloud are searched and songs go to `~/djgrab/`.
+
+Soulseek is the optional extra. It searches other people's shared files and prefers a lossless match. Create the account in the Soulseek app first, then save this file as `~/.djgrab/djgrab.toml`:
+
+```toml
+[download]
+enabled = true
+sources = ["youtube", "soundcloud"]
+format = "m4a"
+bitrate = "256k"
+
+[library]
+fallback_genre = "Unknown"
+
+[library.genres]
+pop = "Pop"
+"dance pop" = "Pop"
+
+[spotify]
+client_id = ""
+client_secret = ""
+
+[soulseek]
+username = "your-soulseek-username"
+password = "your-soulseek-password"
 ```
 
-The set audio is downloaded once and cut. Each piece is trimmed inward by `trim_s` seconds. A piece shorter than 60 seconds after that trim is skipped. `"id_clip": true` saves 12 seconds from `start_s` under `ids/` and does not replace the track file.
+Leave `username` and `password` empty to keep Soulseek off. Both must be set for it to run.
 
-### Clear
+Spotify keys are optional. The genre folder comes from an iTunes artist search and does not need them. `SPOTIFY_CLIENT_ID` and `SPOTIFY_CLIENT_SECRET` override the file when they are set.
 
-`djgrab clear` deletes `data/djgrab.sqlite`, including the `-wal` and `-shm` files. Songs in `~/djgrab/` stay. After a clear, djgrab no longer knows which songs were already downloaded, so the next set fetches them again.
+A `djgrab.toml` in the current directory is used first. `--config /path/to/djgrab.toml` picks a file directly.
 
-## How a search picks a file
-
-The query is the artist and title with these words removed: remaster, remastered, official, audio, video, lyric, lyrics, hd, hq, and a 4-digit year. Accents are ignored while comparing. The saved filename keeps the original spelling.
-
-A candidate is usable when every title word is in its title and every artist word is in its artist. When the track has a length, the candidate must be within 15 seconds. A track with no length skips that check. When the track has a mix, the candidate's trailing parenthetical must be that mix.
-
-YouTube and SoundCloud are searched together. Soulseek runs at the same time when it is configured. Downloads stay one song at a time.
-
-Ranking:
-
-1. A lossless Soulseek file wins over a lossy file.
-2. Closest length, when the track has a length.
-3. Fewer extra words in the title.
-4. An uploader that matches the artist.
-
-DRM, unavailable, and private errors drop that file and try the next one. Any other download error stops that song. Nothing usable goes to the buy list when `fallback_to_buylist` is true.
-
-A title-only name whose artist is `Unknown` has to match the title exactly, so `Luna` does not grab a longer filename that merely contains that word.
-
-## Files and tags
-
-YouTube and SoundCloud downloads are AAC in m4a at the configured bitrate and are marked lossy. A Soulseek flac, wav, or aiff that matches is filed as lossless.
-
-The source thumbnail is embedded in the file when YouTube or SoundCloud provides one. Finder and Rekordbox read that picture from inside the file. A missing picture does not stop the download. A Soulseek file keeps the cover it already has.
-
-Genre comes from Spotify when credentials are set. The folder is `library.genres` when that genre is listed, otherwise the genre text. No genre uses `fallback_genre`.
-
-An existing file with the same name gets the track id added: `Artist - Title (12).m4a`.
-
-## Database
-
-SQLite file: `data/djgrab.sqlite`.
-
-- `tracks.acquired_via`: `inbox`, `free`, `web`, `purchase`
-- `jobs.status`: `pending`, `acquired`, `needs_review`, `buylist`, `failed`
-- `inbox_files`: the filed path for a track
-- `spend`: one row per successful yt-dlp download
-
-Staging files live in `data/staging/` until they are filed.
+| Key | Meaning |
+| --- | --- |
+| `sources` | `youtube` and `soundcloud` |
+| `format` | `m4a` or `mp3` |
+| `bitrate` | audio bitrate, default `256k` |
+| `fallback_genre` | folder used when no genre is found |
+| `genres` | map a genre string to a folder name, ignoring case |
 
 ## Tests
 
@@ -182,8 +142,8 @@ uv sync --extra dev
 uv run pytest
 ```
 
-Tests are offline. They use recorded search results and do not call YouTube, SoundCloud, Spotify, or Soulseek.
+Tests are offline except one that serves a wav on localhost and runs `yt-dlp` and `ffmpeg`.
 
-## What this build does not do
+## What this does not do
 
-It does not play a stream, buy from a store, or listen to the audio to name a song. A DJ mix overlaps tracks, so silence detection and fingerprinting name the wrong recording. It does not unlock SoundCloud Go+ or Spotify audio. It does not sync a DJ app library.
+It does not play a stream, buy from a store, or listen to the audio to name a song. It does not cut a DJ mix into songs. It does not sync a DJ app.

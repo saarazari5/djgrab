@@ -11,7 +11,7 @@ from djgrab.acquire.spotify import (
     track_from_embed,
     tracks_from_playlist_embed,
 )
-from djgrab.acquire.webdl import parse_dump
+from djgrab.acquire.webdl import DownloadError, parse_dump
 from djgrab.service import grab_spotify
 from tests.support import FakeDL, cfg, db, paths
 
@@ -127,6 +127,35 @@ def test_artist_search_maps_genre():
     assert genre_for_artist("Abstrakt", "id", "secret", transport) == "psytrance"
     assert genre_for_artist("Abstrkat", "id", "secret", transport) == "psytrance"
     assert genre_for_artist("Gorovich feat. Nova", "id", "secret", transport) == "progressive psytrance"
+
+
+def test_itunes_supplies_genre_when_spotify_has_none():
+    def transport(url, data=None, headers=None):
+        if urllib.parse.quote("DEKEL & SHTUBY") in url:
+            return json.dumps({"results": [{"artistName": "Other", "primaryGenreName": "Pop"}]})
+        if "DEKEL" in url:
+            return json.dumps({
+                "results": [
+                    {"artistName": "DEKEL", "primaryGenreName": "Trance"},
+                    {"artistName": "Dekel", "primaryGenreName": "Pop"},
+                ]
+            })
+        raise AssertionError(url)
+
+    assert genre_for_artist("DEKEL", "", "", transport) == "Trance"
+    assert genre_for_artist("DEKEL & SHTUBY", "", "", transport) == "Trance"
+
+
+def test_itunes_retries_when_apple_is_busy():
+    calls = {"n": 0}
+
+    def transport(url, data=None, headers=None):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise DownloadError("spotify lookup failed: HTTP Error 429: Too Many Requests")
+        return json.dumps({"results": [{"artistName": "Night Bus", "primaryGenreName": "Trance"}]})
+
+    assert genre_for_artist("Night Bus", "", "", transport) == "Trance"
 
 
 def test_artist_api_uses_first_genre():

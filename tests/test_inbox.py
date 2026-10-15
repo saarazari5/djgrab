@@ -100,6 +100,7 @@ def test_default_songs_folder_is_djgrab_at_root(monkeypatch):
 
     monkeypatch.delenv("DJGRAB_DATA", raising=False)
     assert _paths(None).library == Path.home() / "djgrab"
+    assert _paths(None).db == Path.home() / ".djgrab" / "djgrab.sqlite"
     assert _paths(Path("custom")).library == Path("custom") / "djgrab"
 
 
@@ -120,3 +121,28 @@ def test_clear_deletes_the_database(tmp_path):
     assert not (tmp_path / "djgrab.sqlite-wal").exists()
     assert song.is_file()
     assert main(["clear", "--data", str(tmp_path)]) == 0
+
+
+def test_legacy_project_database_is_copied_once(tmp_path, monkeypatch):
+    from djgrab.cli import _import_legacy_database
+
+    legacy = tmp_path / "data"
+    legacy.mkdir()
+    (legacy / "djgrab.sqlite").write_bytes(b"old")
+    (legacy / "djgrab.sqlite-wal").write_bytes(b"wal")
+    home = tmp_path / "home"
+    monkeypatch.chdir(tmp_path)
+    _import_legacy_database(home / ".djgrab")
+    assert (home / ".djgrab" / "djgrab.sqlite").read_bytes() == b"old"
+    assert (home / ".djgrab" / "djgrab.sqlite-wal").read_bytes() == b"wal"
+    (home / ".djgrab" / "djgrab.sqlite").unlink()
+    (legacy / "djgrab.sqlite").write_bytes(b"newer")
+    _import_legacy_database(home / ".djgrab")
+    assert not (home / ".djgrab" / "djgrab.sqlite").exists()
+
+
+def test_a_word_is_not_a_link(capsys):
+    from djgrab.cli import main
+
+    assert main(["set"]) == 2
+    assert "not a link: set" in capsys.readouterr().err

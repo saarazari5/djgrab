@@ -9,6 +9,7 @@ from djgrab.acquire.webdl import DownloadError, WebCandidate
 
 # shortcut: one login for the process and an 8s result wait, upgrade if a long playlist gets the account banned
 _WAIT_S = 8
+_IDLE_S = 15
 _LOSSLESS = {".flac", ".wav", ".aiff", ".aif"}
 
 
@@ -59,8 +60,10 @@ class SoulseekSource:
         username, filename = url.split("\x1f", 1)
         try:
             path = self._call(self._fetch(username, filename, dest_dir))
+        except TimeoutError as exc:
+            raise DownloadError("soulseek timed out") from exc
         except Exception as exc:
-            raise DownloadError(str(exc)) from exc
+            raise DownloadError(str(exc) or "soulseek failed") from exc
         if not isinstance(path, Path) or not path.is_file():
             raise DownloadError("soulseek wrote no file")
         return path
@@ -106,6 +109,8 @@ class SoulseekSource:
         dest_dir.mkdir(parents=True, exist_ok=True)
         self._client.settings.shares.download = str(dest_dir)
         transfer = await self._client.transfers.download(username, filename)
+        idle = 0
+        last = -1
         for _ in range(180):
             name = getattr(getattr(transfer.state, "VALUE", None), "name", "")
             if name in {"FAILED", "ABORTED"}:
@@ -113,5 +118,25 @@ class SoulseekSource:
             local = getattr(transfer, "local_path", None)
             if name == "COMPLETE" and local and Path(local).is_file():
                 return Path(local)
+            got = int(getattr(transfer, "bytes_transfered", 0) or 0)
+            idle, reason = _idle_error(name, got != last, idle)
+            last = got
+            if reason:
+                try:
+                    await self._client.transfers.abort(transfer)
+                except Exception:
+                    pass
+                raise DownloadError(reason)
             await asyncio.sleep(1)
         raise DownloadError("soulseek timed out")
+
+
+def _idle_error(name: str, moved: bool, idle: int) -> tuple[int, str]:
+    if name == "DOWNLOADING" and moved:
+        return 0, ""
+    idle += 1
+    if idle < _IDLE_S:
+        return idle, ""
+    if name == "DOWNLOADING":
+        return idle, "soulseek stalled"
+    return idle, "soulseek peer did not start"

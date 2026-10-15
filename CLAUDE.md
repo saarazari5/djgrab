@@ -1,26 +1,23 @@
 # djgrab
 
-Personal lossy downloads from YouTube and SoundCloud. Spec: `docs/SPEC.md`. Decisions: `docs/DECISIONS.md`.
+Downloads a song from a link into `~/djgrab/`. Spec: `docs/SPEC.md`. Decisions: `docs/DECISIONS.md`.
 
 ## Binaries
 
 `yt-dlp` and `ffmpeg` are required. `flac` and `fpcalc` are reported by `djgrab doctor` and are not used by this build.
 
-Audio the tool downloads itself (single-track rips and set audio for cutting) is an allowed input. Personal use. Always flagged lossy.
+Audio the tool downloads itself is an allowed input. Web downloads are flagged lossy. A Soulseek flac, wav, or aiff is flagged lossless.
 
 ## Commands
 
 ```
 uv run djgrab doctor
-uv run djgrab add --artist A --title T --duration 180
-uv run djgrab keep <track_id>
-uv run djgrab grab <track_id|job_id|spotify-track-url>
-uv run djgrab playlist <youtube-or-soundcloud-url|spotify-playlist-url>
-uv run djgrab set <url>
-uv run djgrab cut <set_url> <timeline.json>
+uv run djgrab <url>
 uv run djgrab clear
 ```
 
+The database and staging live in `~/.djgrab/` unless `--data` or `DJGRAB_DATA` is set. Config is `./djgrab.toml` when that file exists, otherwise `~/.djgrab/djgrab.toml`.
+
 ## Errors
 
-A yt-dlp failure marks that job failed and retryable, or sends it to the buy list when `fallback_to_buylist` is set. Other jobs in the batch still run.
+A word that is not `doctor`, `clear`, or a URL is refused before yt-dlp runs. A yt-dlp failure marks that job failed and retryable, or sends it to the buy list when `fallback_to_buylist` is set. A Soulseek download failure tries the next file. Other jobs in the batch still run.

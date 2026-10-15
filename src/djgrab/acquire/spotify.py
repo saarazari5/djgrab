@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import json
 import re
+import time
 import urllib.parse
 import urllib.request
 
@@ -132,6 +133,7 @@ def list_spotify_playlist(
 
 _tokens: dict[str, str] = {}
 _artist_items: dict[str, list] = {}
+_itunes_results: dict[str, list] = {}
 _CREDIT = re.compile(r"\s*(?:,|&|\b(?:feat|ft|vs)\.?)(?:\s+|$)", re.IGNORECASE)
 
 
@@ -209,11 +211,21 @@ def genre_for_artist(
     client_secret: str,
     transport=_request,
 ) -> str:
-    if not client_id or not client_secret:
-        return ""
     queries = _artist_queries(artist)
     if not queries:
         return ""
+    if client_id and client_secret:
+        found = _spotify_genre(queries, client_id, client_secret, transport)
+        if found:
+            return found
+    for index, query in enumerate(queries):
+        found = _itunes_genre(query, transport, allow_first=index == len(queries) - 1)
+        if found:
+            return found
+    return ""
+
+
+def _spotify_genre(queries: list[str], client_id: str, client_secret: str, transport) -> str:
     items = _search_items(queries[0], client_id, client_secret, transport)
     exact = _exact_genre(queries[0], items)
     if exact:
@@ -222,6 +234,46 @@ def genre_for_artist(
         more = _search_items(queries[1], client_id, client_secret, transport)
         return _exact_genre(queries[1], more) or _first_genre(more)
     return _first_genre(items)
+
+
+def _itunes_results_for(query: str, transport) -> list:
+    key = normalize(query)
+    if key in _itunes_results:
+        return _itunes_results[key]
+    url = (
+        "https://itunes.apple.com/search?term="
+        + urllib.parse.quote(query)
+        + "&entity=musicArtist&limit=5"
+    )
+    for attempt in range(3):
+        try:
+            items = json.loads(transport(url)).get("results") or []
+        except DownloadError as exc:
+            if "429" not in str(exc) or attempt == 2:
+                return []
+            time.sleep(1 + attempt)
+            continue
+        except (KeyError, TypeError, json.JSONDecodeError):
+            return []
+        _itunes_results[key] = items
+        return items
+    return []
+
+
+def _itunes_genre(query: str, transport, *, allow_first: bool) -> str:
+    wanted = normalize(query)
+    fallback = ""
+    for item in _itunes_results_for(query, transport):
+        if not isinstance(item, dict):
+            continue
+        genre = str(item.get("primaryGenreName") or "")
+        if not genre:
+            continue
+        if normalize(str(item.get("artistName") or "")) == wanted:
+            return genre
+        if not fallback:
+            fallback = genre
+    return fallback if allow_first else ""
 
 
 def genre_from_artist_api(

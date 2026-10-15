@@ -117,6 +117,50 @@ def test_drm_falls_back_to_soulseek(tmp_path):
     assert downloader.soulseek.fetches == ["peer\x1fBad.mp3"]
 
 
+def test_stalled_soulseek_tries_the_next_hit(tmp_path):
+    con = db(tmp_path)
+    track_id = _track(con, artist="Freedom Fighters", title="Better Future", mix="", duration_s=0)
+    youtube = WebCandidate(
+        "youtube",
+        "https://www.youtube.com/watch?v=better",
+        "Freedom Fighters & Sphera - Better Future",
+        "Freedom Fighters",
+        0,
+    )
+    soul = WebCandidate(
+        "soulseek",
+        "peer\x1fBetter Future.flac",
+        "Sphera, Freedom Fighters - Better Future (Original Mix).flac",
+        "peer",
+        0,
+        lossless=True,
+    )
+    downloader = FakeDL(candidates=[youtube])
+
+    class _Stalled(_Soul):
+        def fetch(self, url: str, dest_dir: Path) -> Path:
+            self.fetches.append(url)
+            raise DownloadError("soulseek peer did not start")
+
+    downloader.soulseek = _Stalled([soul])
+    outcome = grab(con, cfg(), paths(tmp_path), downloader, track_id)
+    assert outcome.status == "acquired"
+    assert downloader.soulseek.fetches == ["peer\x1fBetter Future.flac"]
+    assert downloader.fetches == ["https://www.youtube.com/watch?v=better"]
+
+
+def test_soulseek_gives_up_when_the_peer_sends_nothing():
+    from djgrab.acquire.soulseek import _idle_error
+
+    idle = 0
+    for _ in range(14):
+        idle, reason = _idle_error("QUEUED", False, idle)
+        assert reason == ""
+    _idle, reason = _idle_error("QUEUED", False, idle)
+    assert reason == "soulseek peer did not start"
+    assert _idle_error("DOWNLOADING", True, 14) == (0, "")
+
+
 def test_soulseek_result_keeps_the_file_name():
     from types import SimpleNamespace
 

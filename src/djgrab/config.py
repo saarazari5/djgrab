@@ -47,9 +47,20 @@ def _spotify_credentials(raw: dict) -> tuple[str, str]:
     return client_id, client_secret
 
 
+def config_path() -> Path | None:
+    local = Path("djgrab.toml")
+    home = Path.home() / ".djgrab" / "djgrab.toml"
+    if local.is_file():
+        return local
+    if home.is_file():
+        return home
+    return None
+
+
 def load_config(path: Path | None = None) -> DownloadConfig:
-    path = path or Path("djgrab.toml")
-    if not path.is_file():
+    if path is None:
+        path = config_path()
+    if path is None or not path.is_file():
         client_id, client_secret = _spotify_credentials({})
         return DownloadConfig(spotify_client_id=client_id, spotify_client_secret=client_secret)
     raw = tomllib.loads(path.read_text())

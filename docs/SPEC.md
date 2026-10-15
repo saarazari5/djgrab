@@ -6,11 +6,11 @@ Personal tool. A keeper with no free source gets a lossy YouTube or SoundCloud c
 
 ### Single
 
-`djgrab keep <track_id>` sets keeper. When `singles` is `auto_keepers`, that also downloads. `djgrab grab <track_id|job_id>` downloads even when the track is not a keeper.
+`djgrab <spotify-track-url>` reads the public title, artist, and duration from the Spotify embed page, then the artist's first genre when the artist page has one. It stores that track and runs the same search. The Spotify URL is not downloaded.
 
-`djgrab grab <spotify-track-url>` reads the public title, artist, and duration from the Spotify embed page, then the artist's first genre when the artist page has one. It stores that track and runs the same search. The Spotify URL is not downloaded. A Spotify playlist URL belongs to `djgrab playlist`.
+`djgrab <youtube-or-soundcloud-video-url>` downloads that file when the page does not name a tracklist.
 
-A filed track is `{genre folder}/{artist} - {title}.m4a` under `djgrab/` in the home folder. A blank genre is filled from Spotify's artist search before the file is written: the artist whose name matches, otherwise the first result that has a genre. `A feat. B` searches the full credit, then the first name. The folder is `library.genres` when that genre is listed, otherwise the genre text. No credentials, no match, or an artist with no genre uses `library.fallback_genre`. An existing file with the same name gets the track id added.
+A blank genre is filled before the file is written. Spotify's artist search is used when it returns a genre. It currently does not, so the genre comes from an iTunes artist search: the artist whose name matches, otherwise the first result. `A feat. B` searches the full credit, then the first name. The folder is `library.genres` when that genre is listed, otherwise the genre text. No match, or an artist with no genre, uses `library.fallback_genre`. An existing file with the same name gets the track id added.
 
 A free link is filed with `acquired_via=free`. Search does not run. A local free file is tagged and filed. A free URL is recorded as the inbox path.
 
@@ -25,23 +25,17 @@ No free link: if the same artist, title, and mix are already filed and the file 
 
 ### Playlist
 
-`djgrab playlist <url>`. Entries already identify the tracks. Each entry URL is downloaded and filed the same way as a web single. No search, no match, no cutting. An entry with no URL is skipped and recorded on the playlist job. One entry failing does not stop the others.
+`djgrab <playlist-url>` downloads each entry of a YouTube playlist, a SoundCloud set, or any URL with `/playlist`. Each entry URL is filed the same way as a web single. No search, no match, no cutting. An entry with no URL is skipped and recorded on the playlist job. One entry failing does not stop the others.
 
-`djgrab playlist <spotify-playlist-url>` reads the public embed track list. Each `spotify:track` entry is stored as a keeper with a blank genre and searched the same way as `djgrab grab <spotify-track-url>`. The Spotify URL is not downloaded. An entry that is not a track is skipped and named on the playlist job. The embed page is the whole list. One entry failing does not stop the others. The parent job reports how many were filed and which were skipped or not acquired.
+`djgrab <spotify-playlist-url>` reads the public embed track list. Each `spotify:track` entry is stored as a keeper with a blank genre and searched the same way as a Spotify track link. The Spotify URL is not downloaded. An entry that is not a track is skipped and named on the playlist job. The embed page is the whole list. One entry failing does not stop the others. The parent job reports how many were filed and which were skipped or not acquired.
 
 ### Set
 
-`djgrab set <url>` reads a tracklist from one long video, then searches and downloads each song on its own. The set audio is not downloaded. Chapters are used when the video has them. Otherwise timestamp lines in the description (`12:34 Artist - Title`, `1:02:03 Artist - Title`) are used. If the description has no times, lines like `Artist - Title` are used. If those are missing too, the first of 100 comments with at least two timestamp lines is used. No chapters, description names, or comment times stops with `video has no tracklist` and does not search. Each song is stored with no duration, because the time it plays in the mix is not the studio length. One song that is not found or fails does not stop the others.
-
-`djgrab cut <set_url> <timeline.json>` still cuts from a JSON list of `{start_s, end_s, track_id}` plus optional `id_clip`.
-
-Track segments are trimmed inward by `trim_s` seconds. A segment shorter than 60 seconds after that trim is skipped. Each remaining cut is filed as `{artist} - {title}` under `djgrab/` in the home folder. One bad cut is recorded and the rest continue.
-
-`id_clip: true` cuts 12 seconds from `start_s` of the same audio, with no trim and no 60 second minimum. Clips are saved under `library/ids/` and do not replace the track file.
+`djgrab <video-url>` reads a tracklist when the page names at least two songs, then searches and downloads each song on its own. The set audio is not downloaded. Chapters are used when the video has them. Otherwise timestamp lines in the description (`12:34 Artist - Title`, `1:02:03 Artist - Title`) are used. If the description has no times, lines like `Artist - Title` are used. If those are missing too, the first of 100 comments with at least two timestamp lines is used. No names means the video is downloaded as one file. Each named song is stored with no duration, because the time it plays in the mix is not the studio length. One song that is not found or fails does not stop the others.
 
 ## Match
 
-A candidate is usable when, after dropping the words remaster, official, audio, video, lyric, hd, and a 4-digit year, every title word is in the candidate title and every artist word is in the candidate artist. Accents are ignored for that comparison. When the track has a duration, the length must be within 15 seconds. A track with no duration skips that check, and length is not used to rank those candidates. When the track has a mix, the candidate's trailing parenthetical must be that mix. The closest length wins, then the title with no extra words, then an uploader that matches the artist. A lossless Soulseek file that passes is preferred. That file is downloaded. If the download fails because it is DRM, unavailable, or private, the next usable file is tried. Nothing usable, or every file failing that way, goes to the buy list when `fallback_to_buylist` is set.
+A candidate is usable when, after dropping the words remaster, official, audio, video, lyric, hd, and a 4-digit year, every title word is in the candidate title and every artist word is in the candidate artist. Accents are ignored for that comparison. When the track has a duration, the length must be within 15 seconds. A track with no duration skips that check, and length is not used to rank those candidates. When the track has a mix, the candidate's trailing parenthetical must be that mix. The closest length wins, then the title with no extra words, then an uploader that matches the artist. A lossless Soulseek file that passes is preferred. That file is downloaded. If the download fails because it is DRM, unavailable, or private, or the file came from Soulseek, the next usable file is tried. Nothing usable, or every file failing that way, goes to the buy list when `fallback_to_buylist` is set.
 
 The search sent to YouTube, SoundCloud, and Soulseek is the artist and title with those words removed. Soulseek runs only when `[soulseek]` `username` and `password` are set.
 
@@ -62,13 +56,13 @@ Table `library`:
 - `fallback_genre` (folder when the track has no genre)
 - `genres` (map of genre text to folder name, matched without case)
 
-Table `spotify`: `client_id` and `client_secret`. `SPOTIFY_CLIENT_ID` and `SPOTIFY_CLIENT_SECRET` override the file. When the artist page has no genre, those credentials are used to read the first genre from Spotify's artist API. The same credentials search Spotify by artist name whenever a track is filed with a blank genre. Empty credentials leave the genre blank.
+Table `spotify`: `client_id` and `client_secret`. `SPOTIFY_CLIENT_ID` and `SPOTIFY_CLIENT_SECRET` override the file. Spotify's artist record no longer includes a genre. A blank genre is filled from an iTunes artist search. Empty credentials still allow that search.
 
-Missing file uses those defaults. The database and staging stay in `data/`, or `--data`, or `DJGRAB_DATA`. Songs are `djgrab/` in the home folder, or inside that data directory when `--data` or `DJGRAB_DATA` is set.
+Missing file uses those defaults. Config is `./djgrab.toml` when that file exists, otherwise `~/.djgrab/djgrab.toml`. The database and staging stay in `~/.djgrab/`, or `--data`, or `DJGRAB_DATA`. Songs are `djgrab/` in the home folder, or inside that data directory when `--data` or `DJGRAB_DATA` is set.
 
 ## Storage
 
-SQLite `data/djgrab.sqlite`.
+SQLite `~/.djgrab/djgrab.sqlite`.
 
 - `tracks.acquired_via`: `inbox` (default), `free`, `web`, `purchase`
 - `jobs.status`: `pending`, `acquired`, `needs_review`, `buylist`, `failed`
@@ -78,8 +72,7 @@ SQLite `data/djgrab.sqlite`.
 ## Commands
 
 - `djgrab doctor` — `yt-dlp` and `ffmpeg` are required. `flac` and `fpcalc` are reported and do not block this build. Missing required tools include an install line.
-- `djgrab add` — create a track.
-- `djgrab keep`, `djgrab grab`, `djgrab playlist`, `djgrab set`, `djgrab cut`.
+- `djgrab <url>` — download that link. A word that is not `doctor`, `clear`, or a URL is refused. The database stays inside the tool.
 - `djgrab clear` — delete the database. Song files stay.
 
 ## Binaries

@@ -28,6 +28,15 @@ def test_existing_file_adds_track_id(tmp_path):
     assert again.parent.name == "Pop"
 
 
+def test_config_in_the_home_folder_is_used_when_the_local_file_is_missing(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    (home / ".djgrab").mkdir(parents=True)
+    (home / ".djgrab" / "djgrab.toml").write_text('[library]\nfallback_genre = "Home"\n')
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("djgrab.config.Path.home", lambda: home)
+    assert load_config().fallback_genre == "Home"
+
+
 def test_env_overrides_spotify_credentials(tmp_path, monkeypatch):
     path = tmp_path / "djgrab.toml"
     path.write_text('[spotify]\nclient_id = "file"\nclient_secret = "file-secret"\n')

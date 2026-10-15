@@ -1,7 +1,10 @@
 [project]
 name = "djgrab"
 version = "0.1.0"
-description = "Personal lossy downloads for tracks you keep"
+description = "Download a song from a link into ~/djgrab"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.11"
 dependencies = ["aioslsk"]
 

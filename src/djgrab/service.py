@@ -5,7 +5,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from djgrab.acquire.spotify import list_spotify_playlist, lookup_spotify, spotify_playlist_id
+from djgrab.acquire.spotify import list_spotify_playlist, lookup_spotify, spotify_playlist_id, spotify_track_id
 from djgrab.acquire.webdl import DownloadError, WebCandidate, YtDlpDownloader, permanent_error
 from djgrab.config import DownloadConfig, Paths
 from djgrab.db import add_job, add_track, finish_job, get_track
@@ -114,7 +114,7 @@ def grab(con, cfg: DownloadConfig, paths: Paths, downloader, ident: int) -> Outc
             break
         except DownloadError as exc:
             last_error = str(exc)
-            if permanent_error(exc):
+            if permanent_error(exc) or hit.source == "soulseek":
                 continue
             return _hard_fail(con, cfg, job_id, last_error)
     if audio is None:
@@ -412,22 +412,19 @@ def cut_set(
     return Outcome(job_id, status, message)
 
 
-def split_set(con, cfg: DownloadConfig, paths: Paths, downloader, url: str) -> Outcome:
-    job_id = add_job(con, None, "set")
-    blocked = _enabled_block(con, cfg, job_id)
-    if blocked:
-        return blocked
+def songs_for_video(downloader, url: str, comment_dir: Path):
+    info = downloader.dump_info(url)
+    songs = tracklist_from_info(info)
+    if songs:
+        return songs
     try:
-        info = downloader.dump_info(url)
-        songs = tracklist_from_info(info)
-        if not songs:
-            info = downloader.dump_info(url, paths.staging / f"set-{job_id}-info", comments=True)
-            songs = tracklist_from_comments(info)
-    except DownloadError as exc:
-        return _hard_fail(con, cfg, job_id, str(exc))
-    if not songs:
-        finish_job(con, job_id, "failed", "video has no tracklist")
-        raise DownloadError("video has no tracklist")
+        info = downloader.dump_info(url, comment_dir, comments=True)
+    except DownloadError:
+        return []
+    return tracklist_from_comments(info)
+
+
+def _grab_named_songs(con, cfg, paths, downloader, job_id: int, songs) -> Outcome:
     failed: list[str] = []
     not_acquired: list[str] = []
     filed = 0
@@ -454,6 +451,49 @@ def split_set(con, cfg: DownloadConfig, paths: Paths, downloader, url: str) -> O
             not_acquired.append(note)
         _say(f"{index}/{total} {outcome.status} {label}: {outcome.message}")
     return _playlist_outcome(con, job_id, filed, [], not_acquired, failed)
+
+
+def split_set(con, cfg: DownloadConfig, paths: Paths, downloader, url: str) -> Outcome:
+    job_id = add_job(con, None, "set")
+    blocked = _enabled_block(con, cfg, job_id)
+    if blocked:
+        return blocked
+    try:
+        songs = songs_for_video(downloader, url, paths.staging / f"set-{job_id}-info")
+    except DownloadError as exc:
+        return _hard_fail(con, cfg, job_id, str(exc))
+    if not songs:
+        finish_job(con, job_id, "failed", "video has no tracklist")
+        raise DownloadError("video has no tracklist")
+    return _grab_named_songs(con, cfg, paths, downloader, job_id, songs)
+
+
+def link_kind(url: str) -> str:
+    if spotify_track_id(url):
+        return "spotify-track"
+    lowered = url.casefold()
+    playlist = spotify_playlist_id(url) or (
+        "watch?" not in lowered
+        and "youtu.be/" not in lowered
+        and ("list=" in lowered or "/sets/" in lowered or "/playlist" in lowered)
+    )
+    return "playlist" if playlist else "video"
+
+
+def download_link(con, cfg: DownloadConfig, paths: Paths, downloader, url: str) -> Outcome:
+    kind = link_kind(url)
+    if kind == "spotify-track":
+        return grab_spotify(con, cfg, paths, downloader, url)
+    if kind == "playlist":
+        return run_playlist(con, cfg, paths, downloader, url)
+    songs = songs_for_video(downloader, url, paths.staging / "link-info")
+    if not songs:
+        return run_playlist(con, cfg, paths, downloader, url)
+    job_id = add_job(con, None, "set")
+    blocked = _enabled_block(con, cfg, job_id)
+    if blocked:
+        return blocked
+    return _grab_named_songs(con, cfg, paths, downloader, job_id, songs)
 
 
 def make_downloader(cfg: DownloadConfig) -> YtDlpDownloader:
