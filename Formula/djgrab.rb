@@ -170,7 +170,19 @@ class Djgrab < Formula
   end
 
   def install
-    virtualenv_install_with_resources
+    # Homebrew's pip passes --no-binary=:all:, which rejects a wheel.
+    venv = virtualenv_create(libexec, "python3.13")
+    wheels, sources = resources.partition { |resource| resource.url.end_with?(".whl") }
+    venv.pip_install sources
+    python = libexec/"bin/python"
+    pip = Formula["python@3.13"].opt_bin/"python3.13"
+    wheels.each do |resource|
+      resource.fetch
+      system pip, "-m", "pip", "--python=#{python}", "install",
+             "--disable-pip-version-check", "--no-deps", "--ignore-installed",
+             resource.cached_download
+    end
+    venv.pip_install_and_link buildpath
   end
 
   test do
