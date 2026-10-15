@@ -101,9 +101,9 @@ password = "your-soulseek-password"
 
 A `djgrab.toml` in the current directory is used first.
 
-## What it cannot do
+## What it cannot do (yet)
 
-- Download Spotify or SoundCloud Go+ audio
+- Download directly from Spotify or SoundCloud Go+ audio
 - Listen to a mix and name the songs
 - Cut a DJ mix into separate files
 - Play a song, buy it, or sync a DJ app
