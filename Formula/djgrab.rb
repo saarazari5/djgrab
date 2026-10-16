@@ -178,9 +178,11 @@ class Djgrab < Formula
     pip = Formula["python@3.13"].opt_bin/"python3.13"
     wheels.each do |resource|
       # Already fetched before the install sandbox, which cannot download.
+      # pip parses the wheel filename; Homebrew's cache prefixes it with "<sha>--".
+      wheel = buildpath/File.basename(resource.url)
+      cp resource.cached_download, wheel
       system pip, "-m", "pip", "--python=#{python}", "install",
-             "--disable-pip-version-check", "--no-deps", "--ignore-installed",
-             resource.cached_download
+             "--disable-pip-version-check", "--no-deps", "--ignore-installed", wheel
     end
     venv.pip_install_and_link buildpath
   end
