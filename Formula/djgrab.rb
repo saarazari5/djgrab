@@ -9,7 +9,9 @@ class Djgrab < Formula
   # WSL is Linux, so the Linux wheels are the Windows install.
   # shortcut: Linux wheels are x86_64 only, upgrade when an ARM WSL bottle is needed
 
+  depends_on "chromaprint"
   depends_on "ffmpeg"
+  depends_on "flac"
   depends_on "python@3.13"
   depends_on "yt-dlp"
 
