@@ -25,6 +25,16 @@ _NEXT = re.compile(
 )
 
 
+_MIXED = re.compile(r"(\s+-)?\s+Mixed$", re.IGNORECASE)
+
+
+def unmixed(title: str, duration_s: float) -> tuple[str, float]:
+    """DJ-mix albums name tracks "Title - Mixed" and report the mixed segment's length, not the song's."""
+    if not _MIXED.search(title):
+        return title, duration_s
+    return _MIXED.sub("", title).strip(), 0
+
+
 def spotify_track_id(url: str) -> str | None:
     match = _TRACK.search(url.strip())
     return match.group(1) if match else None
@@ -60,7 +70,7 @@ def tracks_from_playlist_embed(html: str) -> tuple[list[tuple[str, str, float]],
         if not uri.startswith("spotify:track:") or not title or duration_s <= 0:
             skipped.append(label)
             continue
-        tracks.append((artist, title, duration_s))
+        tracks.append((artist, *unmixed(title, duration_s)))
     return tracks, skipped
 
 
@@ -75,7 +85,7 @@ def track_from_embed(html: str) -> tuple[str, str, float]:
         raise DownloadError("spotify page had no track data") from exc
     if not title or duration_s <= 0:
         raise DownloadError("spotify page had no track data")
-    return artist, title, duration_s
+    return artist, *unmixed(title, duration_s)
 
 
 def artist_id_from_embed(html: str) -> str:

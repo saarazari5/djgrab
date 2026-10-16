@@ -12,6 +12,7 @@ from djgrab.acquire.spotify import (
     spotify_track_id,
     track_from_embed,
     tracks_from_playlist_embed,
+    unmixed,
 )
 from djgrab.acquire.webdl import DownloadError, parse_dump
 from djgrab.service import grab_spotify
@@ -53,6 +54,14 @@ def test_album_url_reads_the_embed_track_list():
     assert seen == ["https://open.spotify.com/embed/album/78M0jtqcImmaJ2W9ebeMFs"]
     assert tracks[0] == ("Nova Ridge", "Solar Drift", 180.0)
     assert skipped == ["Show - Talk"]
+
+
+def test_mixed_album_titles_lose_the_suffix_and_duration():
+    assert unmixed("Eos - Mixed", 251) == ("Eos", 0)
+    assert unmixed("Recycled - Dusty Kid Remix Mixed", 251) == ("Recycled - Dusty Kid Remix", 0)
+    assert unmixed("Mixed Emotions", 251) == ("Mixed Emotions", 251)
+    mixed = PLAYLIST.replace('"title":"Solar Drift"', '"title":"Solar Drift - Mixed"')
+    assert tracks_from_playlist_embed(mixed)[0][0] == ("Nova Ridge", "Solar Drift", 0)
 
 
 def test_playlist_embed_keeps_tracks_and_names_other_entries():

@@ -17,7 +17,7 @@ from djgrab.acquire.spotify import (
 from djgrab.acquire.webdl import DownloadError, WebCandidate, YtDlpDownloader, permanent_error
 from djgrab.config import DownloadConfig, Paths
 from djgrab.db import add_job, add_track, finish_job, get_track
-from djgrab.identity.match import TrackQuery, choose
+from djgrab.identity.match import TrackQuery, choose, rejections
 from djgrab.identity.normalize import parse_title, search_query
 from djgrab.inbox import file_free, file_staged, filed_copy
 from djgrab.media.cut import cut_segments, parse_timeline
@@ -95,7 +95,7 @@ def _match_track(downloader, track) -> tuple[str, object]:
         return "none", (error or "no match", [])
     _kind, hits = choose(_query(track), found)
     if not hits:
-        return "none", ("no match", found)
+        return "none", (f"no match ({rejections(_query(track), found)})", found)
     return "ready", hits
 
 
@@ -205,6 +205,21 @@ def _say(message: str) -> None:
     print(message, flush=True)
 
 
+def _tone(message: str, code: str) -> str:
+    if not sys.stdout.isatty():
+        return message
+    return f"\x1b[{code}m{message}\x1b[0m"
+
+
+def _choice_line(label: str, on: bool, current: bool) -> str:
+    box = "x" if on else " "
+    if current:
+        return f"\x1b[1;36m> [{box}] {label}\x1b[0m"
+    if on:
+        return f"  \x1b[32m[{box}]\x1b[0m {label}"
+    return f"  \x1b[2m[{box}] {label}\x1b[0m"
+
+
 def _entry_label(entry: WebCandidate) -> str:
     if entry.title:
         if entry.uploader and not entry.title.casefold().startswith(entry.uploader.casefold()):
@@ -311,10 +326,8 @@ def _paint(labels: list[str], checked: list[bool], cursor: int, redraw: bool) ->
     if redraw:
         sys.stdout.write(f"\x1b[{len(labels) + 1}A")
     for index, label in enumerate(labels):
-        mark = ">" if index == cursor else " "
-        box = "x" if checked[index] else " "
-        sys.stdout.write(f"\r\x1b[2K{mark} [{box}] {label}\n")
-    sys.stdout.write("\r\x1b[2Kspace toggles, enter downloads\n")
+        sys.stdout.write(f"\r\x1b[2K{_choice_line(label, checked[index], index == cursor)}\n")
+    sys.stdout.write(f"\r\x1b[2K{_tone('space toggles, enter downloads', '2')}\n")
     sys.stdout.flush()
 
 
@@ -323,7 +336,7 @@ def _review_rows(con, cfg, paths, downloader, job_id: int, rows, skipped: list[s
     for track_id, label in rows:
         track = get_track(con, track_id)
         if filed_copy(con, track["artist"], track["title"], track["mix"] or ""):
-            _say(f"already have {label}")
+            _say(_tone(f"already have  {label}", "32"))
             skipped.append(f"{label}: already have")
             continue
         pending.append(
@@ -338,7 +351,7 @@ def _review_rows(con, cfg, paths, downloader, job_id: int, rows, skipped: list[s
         )
     offers = []
     if pending:
-        _say(f"searching {len(pending)}")
+        _say(_tone(f"searching {len(pending)}", "2"))
 
         def scan(item):
             track_id, label, artist, title, mix, duration_s = item
@@ -352,8 +365,9 @@ def _review_rows(con, cfg, paths, downloader, job_id: int, rows, skipped: list[s
             scanned = list(pool.map(scan, pending))
         for track_id, label, status, payload in scanned:
             if status != "ready":
-                _say(f"no match {label}")
-                skipped.append(f"{label}: no match")
+                message = payload[0]
+                _say(_tone(f"{message}  {label}", "33"))
+                skipped.append(f"{label}: {message}")
                 continue
             offers.append((track_id, label, payload))
     filed = 0

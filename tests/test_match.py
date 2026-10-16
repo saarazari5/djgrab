@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from djgrab.acquire.webdl import WebCandidate, parse_dump
-from djgrab.identity.match import TrackQuery, choose
+from djgrab.identity.match import TrackQuery, choose, rejections
 from djgrab.identity.normalize import search_query
 
 FIXTURE = Path(__file__).parent / "fixtures" / "solar_drift.json"
@@ -22,6 +22,16 @@ def test_wrong_version():
     kind, hits = choose(TRACK, [candidates()[1]])
     assert kind == "none"
     assert hits == []
+
+
+def test_rejections_say_why():
+    found = candidates()
+    assert rejections(TRACK, [found[1]]) == "mix 'Club Mix' x1"
+    mixed = TrackQuery("Nova Ridge", "Solar Drift - Mixed", "", 250)
+    assert rejections(mixed, found) == "title missing mixed x3"
+    assert rejections(TrackQuery("Nova Ridge", "Solar Drift", "", 250), found[:1]) == "duration 180s vs 250s x1"
+    assert rejections(TrackQuery("Someone", "Solar Drift", "", 0), found[:1]) == "artist 'Nova Ridge' x1"
+    assert rejections(TRACK, found[:1]) == ""
 
 
 def test_ambiguous():
