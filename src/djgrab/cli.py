@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 from djgrab.acquire.webdl import DownloadError, doctor_report
-from djgrab.config import Paths, load_config
+from djgrab.config import Paths, config_path, load_config, set_config
 from djgrab.db import clear_db, connect
 from djgrab.service import download_link, make_downloader
 
@@ -57,6 +57,19 @@ def main(argv: list[str] | None = None) -> int:
         text, code = doctor_report()
         print(text)
         return code
+
+    if args.link[0] == "config":
+        if len(args.link) != 3:
+            print("usage: djgrab config <section.key> <value>", file=sys.stderr)
+            return 2
+        path = args.config or config_path() or Path.home() / ".djgrab" / "djgrab.toml"
+        try:
+            set_config(path, args.link[1], args.link[2])
+        except ValueError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+        print(f"set {args.link[1]} in {path}")
+        return 0
 
     paths = _paths(args.data)
     if args.link == ["clear"]:

@@ -1,4 +1,11 @@
+import sys
+
 import pytest
+
+
+@pytest.fixture(autouse=True)
+def _checklist_does_not_read_keys(monkeypatch):
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
 
 
 @pytest.fixture(autouse=True)

@@ -1,11 +1,19 @@
 from __future__ import annotations
 
 import json
+import sys
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from djgrab.acquire.spotify import list_spotify_playlist, lookup_spotify, spotify_playlist_id, spotify_track_id
+from djgrab.acquire.spotify import (
+    list_spotify_playlist,
+    lookup_spotify,
+    spotify_album_id,
+    spotify_playlist_id,
+    spotify_track_id,
+)
 from djgrab.acquire.webdl import DownloadError, WebCandidate, YtDlpDownloader, permanent_error
 from djgrab.config import DownloadConfig, Paths
 from djgrab.db import add_job, add_track, finish_job, get_track
@@ -52,53 +60,51 @@ def _enabled_block(con, cfg: DownloadConfig, job_id: int) -> Outcome | None:
     return Outcome(job_id, "failed", message)
 
 
-def grab(con, cfg: DownloadConfig, paths: Paths, downloader, ident: int) -> Outcome:
-    track_id = resolve_track_id(con, ident)
-    track = get_track(con, track_id)
-    job_id = add_job(con, track_id, "single")
-    blocked = _enabled_block(con, cfg, job_id)
-    if blocked:
-        return blocked
-    if track["free_url"]:
-        _say(f"filing free link for {track['artist']} - {track['title']}")
-        file_free(con, track_id, paths.library, job_id, cfg)
-        return Outcome(job_id, "acquired", "filed free link")
-    existing = filed_copy(con, track["artist"], track["title"], track["mix"] or "")
-    if existing:
-        _say(f"already have {existing}")
-        finish_job(con, job_id, "acquired", f"already have {existing}")
-        return Outcome(job_id, "acquired", f"already have {existing}")
-    query = search_query(track["artist"], track["title"])
-    _say(f"searching {query}")
-    candidates: list[WebCandidate] = []
-    search_error: DownloadError | None = None
+_soulseek = threading.Lock()
+
+
+def _candidates(downloader, query: str) -> tuple[list[WebCandidate], str]:
+    found: list[WebCandidate] = []
+    error = ""
     soulseek = getattr(downloader, "soulseek", None)
     with ThreadPoolExecutor(max_workers=2) as pool:
         meta = pool.submit(downloader.search_meta, query, 5)
-        soul = pool.submit(soulseek.search, query) if soulseek is not None else None
+        soul = None
+        if soulseek is not None:
+            soul = pool.submit(_soulseek_search, soulseek, query)
         try:
-            candidates.extend(meta.result())
+            found.extend(meta.result())
         except DownloadError as exc:
-            search_error = exc
+            error = str(exc)
         if soul is not None:
             try:
-                candidates.extend(soul.result())
+                found.extend(soul.result())
             except DownloadError as exc:
-                search_error = search_error or exc
-    if not candidates:
-        return _hard_fail(con, cfg, job_id, str(search_error or "no match"))
-    kind, hits = choose(_query(track), candidates)
-    if kind == "ambiguous":
-        payload = json.dumps([asdict(hit) for hit in hits])
-        finish_job(con, job_id, "needs_review", "ambiguous match", payload)
-        return Outcome(job_id, "needs_review", "ambiguous match")
-    if kind == "none":
-        payload = json.dumps([asdict(item) for item in candidates])
-        if cfg.fallback_to_buylist:
-            finish_job(con, job_id, "buylist", "no match", payload)
-            return Outcome(job_id, "buylist", "no match")
-        finish_job(con, job_id, "needs_review", "no match", payload)
-        return Outcome(job_id, "needs_review", "no match")
+                error = error or str(exc)
+    return found, error
+
+
+def _soulseek_search(soulseek, query: str):
+    with _soulseek:
+        return soulseek.search(query)
+
+
+def _match_track(downloader, track) -> tuple[str, object]:
+    found, error = _candidates(downloader, search_query(track["artist"], track["title"]))
+    if not found:
+        return "none", (error or "no match", [])
+    _kind, hits = choose(_query(track), found)
+    if not hits:
+        return "none", ("no match", found)
+    return "ready", hits
+
+
+def _save_hits(con, cfg, paths, downloader, track_id, hits, job_id: int | None = None) -> Outcome:
+    if job_id is None:
+        job_id = add_job(con, track_id, "single")
+    blocked = _enabled_block(con, cfg, job_id)
+    if blocked:
+        return blocked
     audio = None
     chosen = hits[0]
     last_error = ""
@@ -135,6 +141,37 @@ def grab(con, cfg: DownloadConfig, paths: Paths, downloader, ident: int) -> Outc
         return Outcome(job_id, "failed", str(exc))
     _say(f"filed {dest}")
     return Outcome(job_id, "acquired", "filed lossy web download")
+
+
+def grab(con, cfg: DownloadConfig, paths: Paths, downloader, ident: int) -> Outcome:
+    track_id = resolve_track_id(con, ident)
+    track = get_track(con, track_id)
+    job_id = add_job(con, track_id, "single")
+    blocked = _enabled_block(con, cfg, job_id)
+    if blocked:
+        return blocked
+    if track["free_url"]:
+        _say(f"filing free link for {track['artist']} - {track['title']}")
+        file_free(con, track_id, paths.library, job_id, cfg)
+        return Outcome(job_id, "acquired", "filed free link")
+    existing = filed_copy(con, track["artist"], track["title"], track["mix"] or "")
+    if existing:
+        _say(f"already have {existing}")
+        finish_job(con, job_id, "acquired", f"already have {existing}")
+        return Outcome(job_id, "acquired", f"already have {existing}")
+    _say(f"searching {search_query(track['artist'], track['title'])}")
+    status, payload = _match_track(downloader, track)
+    if status == "none":
+        message, found = payload
+        if not found:
+            return _hard_fail(con, cfg, job_id, message)
+        dumped = json.dumps([asdict(item) for item in found])
+        if cfg.fallback_to_buylist:
+            finish_job(con, job_id, "buylist", message, dumped)
+            return Outcome(job_id, "buylist", message)
+        finish_job(con, job_id, "needs_review", message, dumped)
+        return Outcome(job_id, "needs_review", message)
+    return _save_hits(con, cfg, paths, downloader, track_id, payload, job_id)
 
 
 def grab_spotify(con, cfg: DownloadConfig, paths: Paths, downloader, url: str, lookup=lookup_spotify) -> Outcome:
@@ -225,7 +262,123 @@ def _playlist_outcome(
     return Outcome(job_id, "acquired", message)
 
 
-def _run_spotify_playlist(con, cfg: DownloadConfig, paths: Paths, downloader, url: str, listing) -> Outcome:
+def _move(key: str, cursor: int, checked: list[bool]) -> tuple[int, bool]:
+    if key == " ":
+        checked[cursor] = not checked[cursor]
+    elif key == "A" and cursor:
+        cursor -= 1
+    elif key == "B" and cursor + 1 < len(checked):
+        cursor += 1
+    elif key in "\r\n":
+        return cursor, True
+    return cursor, False
+
+
+def checklist(labels: list[str], confirm=None) -> list[int]:
+    if confirm is not None:
+        return list(confirm(labels))
+    if not labels or not sys.stdin.isatty():
+        return list(range(len(labels)))
+    return _tty_checklist(labels)
+
+
+def _tty_checklist(labels: list[str]) -> list[int]:
+    import termios
+    import tty
+
+    checked = [True] * len(labels)
+    cursor = 0
+    fd = sys.stdin.fileno()
+    old = termios.tcgetattr(fd)
+    try:
+        tty.setcbreak(fd)
+        _paint(labels, checked, cursor, False)
+        while True:
+            key = sys.stdin.read(1)
+            if key == "\x1b" and sys.stdin.read(1) == "[":
+                key = sys.stdin.read(1)
+            cursor, done = _move(key, cursor, checked)
+            if done:
+                break
+            _paint(labels, checked, cursor, True)
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old)
+        sys.stdout.write("\n")
+    return [index for index, on in enumerate(checked) if on]
+
+
+def _paint(labels: list[str], checked: list[bool], cursor: int, redraw: bool) -> None:
+    if redraw:
+        sys.stdout.write(f"\x1b[{len(labels) + 1}A")
+    for index, label in enumerate(labels):
+        mark = ">" if index == cursor else " "
+        box = "x" if checked[index] else " "
+        sys.stdout.write(f"\r\x1b[2K{mark} [{box}] {label}\n")
+    sys.stdout.write("\r\x1b[2Kspace toggles, enter downloads\n")
+    sys.stdout.flush()
+
+
+def _review_rows(con, cfg, paths, downloader, job_id: int, rows, skipped: list[str], confirm=None) -> Outcome:
+    pending = []
+    for track_id, label in rows:
+        track = get_track(con, track_id)
+        if filed_copy(con, track["artist"], track["title"], track["mix"] or ""):
+            _say(f"already have {label}")
+            skipped.append(f"{label}: already have")
+            continue
+        pending.append(
+            (
+                track_id,
+                label,
+                track["artist"],
+                track["title"],
+                track["mix"] or "",
+                float(track["duration_s"]),
+            )
+        )
+    offers = []
+    if pending:
+        _say(f"searching {len(pending)}")
+
+        def scan(item):
+            track_id, label, artist, title, mix, duration_s = item
+            status, payload = _match_track(
+                downloader,
+                {"artist": artist, "title": title, "mix": mix, "duration_s": duration_s},
+            )
+            return track_id, label, status, payload
+
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            scanned = list(pool.map(scan, pending))
+        for track_id, label, status, payload in scanned:
+            if status != "ready":
+                _say(f"no match {label}")
+                skipped.append(f"{label}: no match")
+                continue
+            offers.append((track_id, label, payload))
+    filed = 0
+    failed: list[str] = []
+    not_acquired: list[str] = []
+    if offers:
+        picked = set(checklist([label for _track_id, label, _hits in offers], confirm))
+        for index, (track_id, label, hits) in enumerate(offers):
+            if index not in picked:
+                _say(f"removed {label}")
+                skipped.append(f"{label}: removed")
+                continue
+            outcome = _save_hits(con, cfg, paths, downloader, track_id, hits)
+            if outcome.status == "acquired":
+                filed += 1
+            elif outcome.status == "failed":
+                failed.append(f"{label}: {outcome.message}")
+            else:
+                not_acquired.append(f"{label}: {outcome.message}")
+    return _playlist_outcome(con, job_id, filed, skipped, not_acquired, failed)
+
+
+def _run_spotify_playlist(
+    con, cfg: DownloadConfig, paths: Paths, downloader, url: str, listing, confirm=None
+) -> Outcome:
     job_id = add_job(con, None, "playlist")
     blocked = _enabled_block(con, cfg, job_id)
     if blocked:
@@ -234,37 +387,19 @@ def _run_spotify_playlist(con, cfg: DownloadConfig, paths: Paths, downloader, ur
         tracks, skipped = listing(url)
     except DownloadError as exc:
         return _hard_fail(con, cfg, job_id, str(exc))
-    failed: list[str] = []
-    not_acquired: list[str] = []
-    filed = 0
     total = len(tracks) + len(skipped)
     _say(f"listed {total}")
-    index = 0
     for label in skipped:
-        index += 1
-        _say(f"{index}/{total} skipped {label}")
+        _say(f"skipped {label}")
+    rows = []
     for artist, title, duration_s in tracks:
-        index += 1
-        label = f"{artist} - {title}"
-        track_id = add_track(
-            con,
-            artist=artist,
-            title=title,
-            duration_s=duration_s,
-            keeper=1,
+        rows.append(
+            (
+                add_track(con, artist=artist, title=title, duration_s=duration_s, keeper=1),
+                f"{artist} - {title}",
+            )
         )
-        _say(f"{index}/{total} {label}")
-        outcome = grab(con, cfg, paths, downloader, track_id)
-        if outcome.status == "acquired":
-            filed += 1
-            continue
-        note = f"{label}: {outcome.message}"
-        if outcome.status == "failed":
-            failed.append(note)
-        else:
-            not_acquired.append(note)
-        _say(f"{index}/{total} {outcome.status} {label}: {outcome.message}")
-    return _playlist_outcome(con, job_id, filed, skipped, not_acquired, failed)
+    return _review_rows(con, cfg, paths, downloader, job_id, rows, list(skipped), confirm)
 
 
 def run_playlist(
@@ -273,10 +408,13 @@ def run_playlist(
     paths: Paths,
     downloader,
     url: str,
-    listing=list_spotify_playlist,
+    listing=None,
+    confirm=None,
 ) -> Outcome:
-    if spotify_playlist_id(url):
-        return _run_spotify_playlist(con, cfg, paths, downloader, url, listing)
+    if listing is None:
+        listing = list_spotify_playlist
+    if spotify_playlist_id(url) or spotify_album_id(url):
+        return _run_spotify_playlist(con, cfg, paths, downloader, url, listing, confirm)
     job_id = add_job(con, None, "playlist")
     blocked = _enabled_block(con, cfg, job_id)
     if blocked:
@@ -424,36 +562,26 @@ def songs_for_video(downloader, url: str, comment_dir: Path):
     return tracklist_from_comments(info)
 
 
-def _grab_named_songs(con, cfg, paths, downloader, job_id: int, songs) -> Outcome:
-    failed: list[str] = []
-    not_acquired: list[str] = []
-    filed = 0
-    total = len(songs)
-    _say(f"listed {total}")
-    for index, song in enumerate(songs, start=1):
-        label = f"{song.artist} - {song.title}"
-        track_id = add_track(
-            con,
-            artist=song.artist,
-            title=song.title,
-            mix=song.mix,
-            duration_s=0,
+def _grab_named_songs(con, cfg, paths, downloader, job_id: int, songs, confirm=None) -> Outcome:
+    _say(f"listed {len(songs)}")
+    rows = []
+    for song in songs:
+        rows.append(
+            (
+                add_track(
+                    con,
+                    artist=song.artist,
+                    title=song.title,
+                    mix=song.mix,
+                    duration_s=0,
+                ),
+                f"{song.artist} - {song.title}",
+            )
         )
-        _say(f"{index}/{total} {label}")
-        outcome = grab(con, cfg, paths, downloader, track_id)
-        if outcome.status == "acquired":
-            filed += 1
-            continue
-        note = f"{label}: {outcome.message}"
-        if outcome.status == "failed":
-            failed.append(note)
-        else:
-            not_acquired.append(note)
-        _say(f"{index}/{total} {outcome.status} {label}: {outcome.message}")
-    return _playlist_outcome(con, job_id, filed, [], not_acquired, failed)
+    return _review_rows(con, cfg, paths, downloader, job_id, rows, [], confirm)
 
 
-def split_set(con, cfg: DownloadConfig, paths: Paths, downloader, url: str) -> Outcome:
+def split_set(con, cfg: DownloadConfig, paths: Paths, downloader, url: str, confirm=None) -> Outcome:
     job_id = add_job(con, None, "set")
     blocked = _enabled_block(con, cfg, job_id)
     if blocked:
@@ -465,14 +593,14 @@ def split_set(con, cfg: DownloadConfig, paths: Paths, downloader, url: str) -> O
     if not songs:
         finish_job(con, job_id, "failed", "video has no tracklist")
         raise DownloadError("video has no tracklist")
-    return _grab_named_songs(con, cfg, paths, downloader, job_id, songs)
+    return _grab_named_songs(con, cfg, paths, downloader, job_id, songs, confirm)
 
 
 def link_kind(url: str) -> str:
     if spotify_track_id(url):
         return "spotify-track"
     lowered = url.casefold()
-    playlist = spotify_playlist_id(url) or (
+    playlist = spotify_playlist_id(url) or spotify_album_id(url) or (
         "watch?" not in lowered
         and "youtu.be/" not in lowered
         and ("list=" in lowered or "/sets/" in lowered or "/playlist" in lowered)
@@ -480,20 +608,20 @@ def link_kind(url: str) -> str:
     return "playlist" if playlist else "video"
 
 
-def download_link(con, cfg: DownloadConfig, paths: Paths, downloader, url: str) -> Outcome:
+def download_link(con, cfg: DownloadConfig, paths: Paths, downloader, url: str, confirm=None) -> Outcome:
     kind = link_kind(url)
     if kind == "spotify-track":
         return grab_spotify(con, cfg, paths, downloader, url)
     if kind == "playlist":
-        return run_playlist(con, cfg, paths, downloader, url)
+        return run_playlist(con, cfg, paths, downloader, url, confirm=confirm)
     songs = songs_for_video(downloader, url, paths.staging / "link-info")
     if not songs:
-        return run_playlist(con, cfg, paths, downloader, url)
+        return run_playlist(con, cfg, paths, downloader, url, confirm=confirm)
     job_id = add_job(con, None, "set")
     blocked = _enabled_block(con, cfg, job_id)
     if blocked:
         return blocked
-    return _grab_named_songs(con, cfg, paths, downloader, job_id, songs)
+    return _grab_named_songs(con, cfg, paths, downloader, job_id, songs, confirm)
 
 
 def make_downloader(cfg: DownloadConfig) -> YtDlpDownloader:

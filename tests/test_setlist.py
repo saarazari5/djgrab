@@ -80,7 +80,7 @@ def test_set_searches_each_song_and_skips_set_audio(tmp_path):
 
     downloader = DL()
     outcome = split_set(db(tmp_path), cfg(), paths(tmp_path), downloader, "https://example.test/set")
-    assert downloader.searches == ["Nova Ridge Solar Drift", "Low Tide Night Bus"]
+    assert sorted(downloader.searches) == ["Low Tide Night Bus", "Nova Ridge Solar Drift"]
     assert downloader.fetches == ["https://example.test/solar"]
     assert downloader.set_audio is False
     assert outcome.status == "needs_review"

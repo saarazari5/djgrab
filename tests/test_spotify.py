@@ -5,7 +5,9 @@ from pathlib import Path
 from djgrab.acquire.spotify import (
     genre_for_artist,
     genre_from_embed,
+    list_spotify_playlist,
     lookup_spotify,
+    spotify_album_id,
     spotify_playlist_id,
     spotify_track_id,
     track_from_embed,
@@ -35,6 +37,22 @@ def test_spotify_playlist_id_ignores_track_urls():
     assert spotify_playlist_id("https://open.spotify.com/intl-en/playlist/abc") == "abc"
     assert spotify_playlist_id("spotify:playlist:abc") == "abc"
     assert spotify_playlist_id(URL) is None
+
+
+def test_album_url_reads_the_embed_track_list():
+    album = "https://open.spotify.com/album/78M0jtqcImmaJ2W9ebeMFs?si=Ym3uY2TVRJejYMPaBxEr0Q"
+    assert spotify_album_id(album) == "78M0jtqcImmaJ2W9ebeMFs"
+    assert spotify_album_id("spotify:album:abc") == "abc"
+    seen = []
+
+    def transport(url, data=None, headers=None):
+        seen.append(url)
+        return PLAYLIST
+
+    tracks, skipped = list_spotify_playlist(album, transport=transport)
+    assert seen == ["https://open.spotify.com/embed/album/78M0jtqcImmaJ2W9ebeMFs"]
+    assert tracks[0] == ("Nova Ridge", "Solar Drift", 180.0)
+    assert skipped == ["Show - Talk"]
 
 
 def test_playlist_embed_keeps_tracks_and_names_other_entries():

@@ -83,7 +83,14 @@ YouTube and SoundCloud files are m4a and marked lossy. The cover is embedded whe
 
 Optional. YouTube and SoundCloud need no account.
 
-Soulseek is off until both fields are set. Save this as `~/.djgrab/djgrab.toml`:
+Soulseek is off until both fields are set:
+
+```bash
+djgrab config soulseek.username your-soulseek-username
+djgrab config soulseek.password your-soulseek-password
+```
+
+That writes `~/.djgrab/djgrab.toml`. Any `section.key` works the same way, for example `djgrab config spotify.client_id ...`. Or save this file yourself:
 
 ```toml
 [download]

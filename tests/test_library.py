@@ -37,6 +37,23 @@ def test_config_in_the_home_folder_is_used_when_the_local_file_is_missing(tmp_pa
     assert load_config().fallback_genre == "Home"
 
 
+def test_config_command_writes_credentials_and_keeps_the_rest(tmp_path, monkeypatch):
+    from djgrab.cli import main
+
+    home = tmp_path / "home"
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("djgrab.config.Path.home", lambda: home)
+    assert main(["config", "soulseek.username", "dj"]) == 0
+    path = home / ".djgrab" / "djgrab.toml"
+    path.write_text(path.read_text() + '\n[library]\nfallback_genre = "Other"\n\n[library.genres]\n"dance pop" = "Pop"\n')
+    assert main(["config", "soulseek.password", 'p"w']) == 0
+    loaded = load_config(path)
+    assert (loaded.soulseek_username, loaded.soulseek_password) == ("dj", 'p"w')
+    assert loaded.fallback_genre == "Other" and loaded.genres == {"dance pop": "Pop"}
+    assert main(["config", "soulseek"]) == 2
+    assert main(["config", "nodot", "x"]) == 2
+
+
 def test_env_overrides_spotify_credentials(tmp_path, monkeypatch):
     path = tmp_path / "djgrab.toml"
     path.write_text('[spotify]\nclient_id = "file"\nclient_secret = "file-secret"\n')

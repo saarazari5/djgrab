@@ -16,6 +16,9 @@ _TRACK = re.compile(
 _PLAYLIST = re.compile(
     r"(?:open\.spotify\.com/(?:intl-[a-z]{2}/)?playlist/|spotify:playlist:)([A-Za-z0-9]+)"
 )
+_ALBUM = re.compile(
+    r"(?:open\.spotify\.com/(?:intl-[a-z]{2}/)?album/|spotify:album:)([A-Za-z0-9]+)"
+)
 _NEXT = re.compile(
     r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>',
     re.DOTALL,
@@ -29,6 +32,11 @@ def spotify_track_id(url: str) -> str | None:
 
 def spotify_playlist_id(url: str) -> str | None:
     match = _PLAYLIST.search(url.strip())
+    return match.group(1) if match else None
+
+
+def spotify_album_id(url: str) -> str | None:
+    match = _ALBUM.search(url.strip())
     return match.group(1) if match else None
 
 
@@ -125,9 +133,14 @@ def list_spotify_playlist(
     transport=_request,
 ) -> tuple[list[tuple[str, str, float]], list[str]]:
     playlist_id = spotify_playlist_id(url)
-    if not playlist_id:
+    album_id = spotify_album_id(url)
+    if playlist_id:
+        page = f"https://open.spotify.com/embed/playlist/{playlist_id}"
+    elif album_id:
+        page = f"https://open.spotify.com/embed/album/{album_id}"
+    else:
         raise DownloadError("not a spotify playlist url")
-    html = transport(f"https://open.spotify.com/embed/playlist/{playlist_id}")
+    html = transport(page)
     return tracks_from_playlist_embed(html)
 
 

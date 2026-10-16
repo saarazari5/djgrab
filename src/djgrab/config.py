@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import os
+import re
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -55,6 +57,34 @@ def config_path() -> Path | None:
     if home.is_file():
         return home
     return None
+
+
+def _dump_toml(raw: dict, prefix: str = "") -> str:
+    # shortcut: comments are dropped and values are re-serialized, upgrade to tomli-w if that bites
+    def key(name: str) -> str:
+        return name if re.fullmatch(r"[A-Za-z0-9_-]+", name) else json.dumps(name)
+
+    lines = [f"{key(k)} = {json.dumps(v)}" for k, v in raw.items() if not isinstance(v, dict)]
+    if lines and prefix:
+        lines.insert(0, f"[{prefix.rstrip('.')}]")
+    text = "\n".join(lines) + "\n" if lines else ""
+    for k, v in raw.items():
+        if isinstance(v, dict):
+            text += "\n" + _dump_toml(v, f"{prefix}{k}.")
+    return text
+
+
+def set_config(path: Path, dotted_key: str, value: str) -> None:
+    section, _, name = dotted_key.rpartition(".")
+    if not section or not name:
+        raise ValueError(f"key must be section.name, got {dotted_key!r}")
+    raw = tomllib.loads(path.read_text()) if path.is_file() else {}
+    table = raw
+    for part in section.split("."):
+        table = table.setdefault(part, {})
+    table[name] = value
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(_dump_toml(raw).lstrip("\n"))
 
 
 def load_config(path: Path | None = None) -> DownloadConfig:
