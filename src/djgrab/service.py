@@ -17,7 +17,7 @@ from djgrab.acquire.spotify import (
 from djgrab.acquire.webdl import DownloadError, WebCandidate, YtDlpDownloader, permanent_error
 from djgrab.config import DownloadConfig, Paths
 from djgrab.db import add_job, add_track, finish_job, get_track
-from djgrab.identity.match import TrackQuery, choose, rejections
+from djgrab.identity.match import BIG_GAP_S, TrackQuery, choose, duration_gap, rejections, version_note
 from djgrab.identity.normalize import parse_title, search_query
 from djgrab.inbox import file_free, file_staged, filed_copy
 from djgrab.media.cut import cut_segments, parse_timeline
@@ -99,6 +99,30 @@ def _match_track(downloader, track) -> tuple[str, object]:
     return "ready", hits
 
 
+def ask(question: str) -> bool:
+    if not sys.stdin.isatty():
+        return False
+    return input(f"{question} [y/N] ").strip().casefold() in ("y", "yes")
+
+
+def _mmss(seconds: float) -> str:
+    return f"{int(seconds) // 60}:{int(seconds) % 60:02d}"
+
+
+def _vet(query: TrackQuery, label: str, hits) -> str:
+    """Prompt on a big length gap and note a different version. Returns the reason to skip, or ""."""
+    best = hits[0]
+    gap = duration_gap(query, best)
+    if gap > BIG_GAP_S:
+        question = f"{label}: best file is {_mmss(best.duration_s)}, expected {_mmss(query.duration_s)}. download anyway?"
+        if not ask(_tone(question, "33")):
+            return f"length {_mmss(best.duration_s)} vs {_mmss(query.duration_s)}, declined"
+    note = version_note(query, best)
+    if note:
+        _say(_tone(f"note  {label}: {note}", "33"))
+    return ""
+
+
 def _save_hits(con, cfg, paths, downloader, track_id, hits, job_id: int | None = None) -> Outcome:
     if job_id is None:
         job_id = add_job(con, track_id, "single")
@@ -161,6 +185,10 @@ def grab(con, cfg: DownloadConfig, paths: Paths, downloader, ident: int) -> Outc
         return Outcome(job_id, "acquired", f"already have {existing}")
     _say(f"searching {search_query(track['artist'], track['title'])}")
     status, payload = _match_track(downloader, track)
+    if status == "ready":
+        declined = _vet(_query(track), f"{track['artist']} - {track['title']}", payload)
+        if declined:
+            status, payload = "none", (declined, payload)
     if status == "none":
         message, found = payload
         if not found:
@@ -355,15 +383,18 @@ def _review_rows(con, cfg, paths, downloader, job_id: int, rows, skipped: list[s
 
         def scan(item):
             track_id, label, artist, title, mix, duration_s = item
-            status, payload = _match_track(
-                downloader,
-                {"artist": artist, "title": title, "mix": mix, "duration_s": duration_s},
-            )
-            return track_id, label, status, payload
+            track = {"artist": artist, "title": title, "mix": mix, "duration_s": duration_s}
+            status, payload = _match_track(downloader, track)
+            return track_id, label, _query(track), status, payload
 
         with ThreadPoolExecutor(max_workers=4) as pool:
             scanned = list(pool.map(scan, pending))
-        for track_id, label, status, payload in scanned:
+        # Searches ran in parallel above; prompts run here one at a time.
+        for track_id, label, query, status, payload in scanned:
+            if status == "ready":
+                declined = _vet(query, label, payload)
+                if declined:
+                    status, payload = "none", (declined, payload)
             if status != "ready":
                 message = payload[0]
                 _say(_tone(f"{message}  {label}", "33"))

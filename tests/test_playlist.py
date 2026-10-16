@@ -2,7 +2,7 @@ from pathlib import Path
 
 from djgrab.acquire.webdl import DownloadError, WebCandidate, parse_dump
 from djgrab.db import add_track, get_track
-from djgrab.service import _move, grab, run_playlist
+from djgrab.service import _choice_line, _move, _tone, grab, run_playlist
 from tests.support import FakeDL, cfg, db, paths
 
 FIXTURE = Path(__file__).parent / "fixtures" / "playlist.json"
@@ -99,6 +99,41 @@ def _listing(tracks):
 SPOTIFY = "https://open.spotify.com/playlist/37i9dQZF1EQqZlCxLOykhS"
 
 
+def test_big_length_gap_asks_once_per_track_after_the_search(tmp_path, monkeypatch, capsys):
+    con = db(tmp_path)
+    solar = WebCandidate("youtube", "https://example.test/solar", "Nova Ridge - Solar Drift (Club Mix)", "", 240)
+    night = WebCandidate("youtube", "https://example.test/night", "Low Tide - Night Bus", "", 200)
+    downloader = FakeDL(candidates=[solar, night])
+    asked = []
+    monkeypatch.setattr("djgrab.service.ask", lambda question: asked.append(question) or False)
+    outcome = run_playlist(
+        con,
+        cfg(),
+        paths(tmp_path),
+        downloader,
+        SPOTIFY,
+        listing=_listing([("Nova Ridge", "Solar Drift", 180.0), ("Low Tide", "Night Bus", 200.0)]),
+        confirm=lambda labels: list(range(len(labels))),
+    )
+    assert asked == ["Nova Ridge - Solar Drift: best file is 4:00, expected 3:00. download anyway?"]
+    assert downloader.fetches == ["https://example.test/night"]
+    assert "Solar Drift: length 4:00 vs 3:00, declined" in outcome.message
+    assert "note" not in capsys.readouterr().out
+
+    monkeypatch.setattr("djgrab.service.ask", lambda question: True)
+    run_playlist(
+        con,
+        cfg(),
+        paths(tmp_path),
+        downloader,
+        SPOTIFY,
+        listing=_listing([("Nova Ridge", "Solar Drift", 180.0)]),
+        confirm=lambda labels: list(range(len(labels))),
+    )
+    assert downloader.fetches[-1] == "https://example.test/solar"
+    assert "note  Nova Ridge - Solar Drift: wanted 'original', got 'Club Mix'" in capsys.readouterr().out
+
+
 def test_unchecked_song_is_not_fetched(tmp_path):
     con = db(tmp_path)
     solar = WebCandidate("youtube", "https://example.test/solar", "Nova Ridge - Solar Drift", "", 180)
@@ -142,6 +177,17 @@ def test_enter_keeps_every_song(tmp_path):
     )
     assert outcome.status == "acquired"
     assert sorted(downloader.fetches) == ["https://example.test/night", "https://example.test/solar"]
+
+
+def test_checklist_colors_separate_owned_songs_from_choices(monkeypatch):
+    monkeypatch.setattr("sys.stdout.isatty", lambda: False)
+    assert _tone("already have  Dreamer", "32") == "already have  Dreamer"
+    monkeypatch.setattr("sys.stdout.isatty", lambda: True)
+    assert _tone("already have  Dreamer", "32").startswith("\x1b[32m")
+    assert _tone("no match  Ghost", "33").startswith("\x1b[33m")
+    assert _choice_line("Limbo", True, True).startswith("\x1b[1;36m>")
+    assert "\x1b[32m[x]" in _choice_line("Be", True, False)
+    assert _choice_line("Be", False, False).startswith("  \x1b[2m")
 
 
 def test_space_unchecks_the_highlighted_song():

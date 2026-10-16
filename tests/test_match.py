@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from djgrab.acquire.webdl import WebCandidate, parse_dump
-from djgrab.identity.match import TrackQuery, choose, rejections
+from djgrab.identity.match import TrackQuery, choose, duration_gap, rejections, version_note
 from djgrab.identity.normalize import search_query
 
 FIXTURE = Path(__file__).parent / "fixtures" / "solar_drift.json"
@@ -18,20 +18,32 @@ def test_right_version():
     assert hits[0].url == "https://example.test/solar"
 
 
-def test_wrong_version():
-    kind, hits = choose(TRACK, [candidates()[1]])
-    assert kind == "none"
-    assert hits == []
+def test_wrong_version_is_taken_with_a_note():
+    club = candidates()[1]
+    kind, hits = choose(TRACK, [club])
+    assert kind == "one" and hits == [club]
+    assert version_note(TRACK, club) == "wanted 'Original Mix', got 'Club Mix'"
+    assert version_note(TRACK, candidates()[0]) == ""
+
+
+def test_spotify_dash_remix_matches_parenthesised_remix():
+    track = TrackQuery("Freedom Fighters, Dusty Kid", "Recycled - Dusty Kid Remix", "", 400)
+    remix = WebCandidate("youtube", "u/remix", "Freedom Fighters - Recycled (Dusty Kid Remix)", "Freedom Fighters", 410)
+    original = WebCandidate("soulseek", "u/orig", "01. Freedom Fighters - Recycled.flac", "peer", 395, lossless=True)
+    kind, hits = choose(track, [original, remix])
+    assert kind == "one" and hits[0] is remix
+    assert version_note(track, original) == "wanted 'Dusty Kid Remix', got 'original'"
+    assert duration_gap(track, remix) == 10
 
 
 def test_rejections_say_why():
     found = candidates()
-    assert rejections(TRACK, [found[1]]) == "mix 'Club Mix' x1"
-    mixed = TrackQuery("Nova Ridge", "Solar Drift - Mixed", "", 250)
-    assert rejections(mixed, found) == "title missing mixed x3"
-    assert rejections(TrackQuery("Nova Ridge", "Solar Drift", "", 250), found[:1]) == "duration 180s vs 250s x1"
+    track = TrackQuery("Nova Ridge", "Solar Drift", "", 180)
+    assert rejections(TrackQuery("Nova Ridge", "Solar Drift Deluxe", "", 0), found[:1]) == "title missing deluxe x1"
     assert rejections(TrackQuery("Someone", "Solar Drift", "", 0), found[:1]) == "artist 'Nova Ridge' x1"
-    assert rejections(TRACK, found[:1]) == ""
+    long_set = WebCandidate("youtube", "u/set", "Nova Ridge - Solar Drift (Full Set)", "Nova Ridge", 3600)
+    assert rejections(track, [long_set]) == "duration 3600s vs 180s x1"
+    assert rejections(track, found) == ""
 
 
 def test_ambiguous():

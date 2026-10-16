@@ -38,6 +38,24 @@ def search_query(artist: str, title: str) -> str:
     return " ".join(kept)
 
 
+def split_version(title: str) -> tuple[str, str]:
+    """'Recycled - Dusty Kid Remix' or 'Recycled (Dusty Kid Remix)' -> ('Recycled', 'Dusty Kid Remix')."""
+    version = ""
+    found = _MIX.search(title.strip())
+    if found:
+        version = found.group(1).strip()
+        title = title[: found.start()]
+    parts = _SPLIT.split(title.strip(), maxsplit=1)
+    if len(parts) == 2:
+        version = f"{parts[1].strip()} {version}".strip()
+    return parts[0].strip(), version
+
+
+def version_key(version: str) -> str:
+    """'Original Mix', '' and '2012 Remaster' are all the plain release."""
+    return " ".join(sorted(clean_tokens(version) - {"original", "mix"}))
+
+
 def parse_title(raw: str) -> tuple[str, str, str]:
     mix = ""
     found = _MIX.search(raw.strip())
