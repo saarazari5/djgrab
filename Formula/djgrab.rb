@@ -177,7 +177,7 @@ class Djgrab < Formula
     python = libexec/"bin/python"
     pip = Formula["python@3.13"].opt_bin/"python3.13"
     wheels.each do |resource|
-      resource.fetch
+      # Already fetched before the install sandbox, which cannot download.
       system pip, "-m", "pip", "--python=#{python}", "install",
              "--disable-pip-version-check", "--no-deps", "--ignore-installed",
              resource.cached_download
