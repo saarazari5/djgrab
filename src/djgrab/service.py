@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -89,14 +90,32 @@ def _soulseek_search(soulseek, query: str):
         return soulseek.search(query)
 
 
-def _match_track(downloader, track) -> tuple[str, object]:
-    found, error = _candidates(downloader, search_query(track["artist"], track["title"]))
+def _from_found(track, found, error: str) -> tuple[str, object]:
     if not found:
         return "none", (error or "no match", [])
     _kind, hits = choose(_query(track), found)
     if not hits:
         return "none", (f"no match ({rejections(_query(track), found)})", found)
     return "ready", hits
+
+
+def _match_track(downloader, track) -> tuple[str, object]:
+    found, error = _candidates(downloader, search_query(track["artist"], track["title"]))
+    return _from_found(track, found, error)
+
+
+def _web_found(downloader, track) -> tuple[list[WebCandidate], str]:
+    try:
+        return downloader.search_meta(search_query(track["artist"], track["title"]), 5), ""
+    except DownloadError as exc:
+        return [], str(exc)
+
+
+def _soul_sets(soulseek, queries: list[str]) -> list[list[WebCandidate]]:
+    try:
+        return soulseek.search_batch(queries)
+    except DownloadError:
+        return [[] for _ in queries]
 
 
 def ask(question: str) -> bool:
@@ -109,18 +128,21 @@ def _mmss(seconds: float) -> str:
     return f"{int(seconds) // 60}:{int(seconds) % 60:02d}"
 
 
-def _vet(query: TrackQuery, label: str, hits) -> str:
-    """Prompt on a big length gap and note a different version. Returns the reason to skip, or ""."""
+def _warnings(query: TrackQuery, label: str, hits) -> tuple[str, str]:
     best = hits[0]
-    gap = duration_gap(query, best)
-    if gap > BIG_GAP_S:
-        question = f"{label}: best file is {_mmss(best.duration_s)}, expected {_mmss(query.duration_s)}. download anyway?"
-        if not ask(_tone(question, "33")):
-            return f"length {_mmss(best.duration_s)} vs {_mmss(query.duration_s)}, declined"
-    note = version_note(query, best)
-    if note:
-        _say(_tone(f"note  {label}: {note}", "33"))
-    return ""
+    question = ""
+    if duration_gap(query, best) > BIG_GAP_S:
+        question = (
+            f"{label}: best file is {_mmss(best.duration_s)}, expected {_mmss(query.duration_s)}. download anyway?"
+        )
+    return question, version_note(query, best)
+
+
+def _shown_label(label: str) -> str:
+    room = max(1, shutil.get_terminal_size(fallback=(80, 24)).columns - 6)
+    if len(label) <= room:
+        return label
+    return label[: room - 1] + "…"
 
 
 def _save_hits(con, cfg, paths, downloader, track_id, hits, job_id: int | None = None) -> Outcome:
@@ -186,9 +208,14 @@ def grab(con, cfg: DownloadConfig, paths: Paths, downloader, ident: int) -> Outc
     _say(f"searching {search_query(track['artist'], track['title'])}")
     status, payload = _match_track(downloader, track)
     if status == "ready":
-        declined = _vet(_query(track), f"{track['artist']} - {track['title']}", payload)
-        if declined:
-            status, payload = "none", (declined, payload)
+        label = f"{track['artist']} - {track['title']}"
+        question, note = _warnings(_query(track), label, payload)
+        if question and not ask(_tone(question, "33")):
+            best = payload[0]
+            message = f"length {_mmss(best.duration_s)} vs {_mmss(_query(track).duration_s)}, declined"
+            status, payload = "none", (message, payload)
+        elif note:
+            _say(_tone(f"note  {label}: {note}", "33"))
     if status == "none":
         message, found = payload
         if not found:
@@ -200,6 +227,76 @@ def grab(con, cfg: DownloadConfig, paths: Paths, downloader, ident: int) -> Outc
         finish_job(con, job_id, "needs_review", message, dumped)
         return Outcome(job_id, "needs_review", message)
     return _save_hits(con, cfg, paths, downloader, track_id, payload, job_id)
+
+
+def buy_list(con) -> list:
+    rows = con.execute(
+        """SELECT t.id, t.artist, t.title, t.mix
+           FROM tracks t
+           JOIN jobs j ON j.track_id = t.id
+           WHERE j.status IN ('buylist', 'needs_review')
+             AND j.id = (
+               SELECT MAX(j2.id) FROM jobs j2
+               WHERE j2.track_id = t.id AND j2.status IN ('buylist', 'needs_review')
+             )
+           ORDER BY t.artist, t.title"""
+    ).fetchall()
+    return [
+        row
+        for row in rows
+        if not filed_copy(con, row["artist"], row["title"], row["mix"] or "")
+    ]
+
+
+def upgrade_library(con, cfg: DownloadConfig, paths: Paths, downloader, confirm=None) -> int:
+    confirm = ask if confirm is None else confirm
+    rows = con.execute(
+        """SELECT t.id, t.artist, t.title, t.mix, t.duration_s, f.id AS file_id, f.path
+           FROM tracks t
+           JOIN inbox_files f ON f.matched_track_id = t.id AND f.status = 'filed'
+           WHERE t.quality != 'lossless'"""
+    ).fetchall()
+    replaced = 0
+    seen: set[int] = set()
+    for row in rows:
+        track_id = int(row["id"])
+        if track_id in seen:
+            continue
+        old = Path(row["path"])
+        if not old.is_file():
+            continue
+        seen.add(track_id)
+        label = f"{row['artist']} - {row['title']}"
+        status, payload = _match_track(downloader, row)
+        if status != "ready" or not payload[0].lossless:
+            _say(f"kept {label}")
+            continue
+        question, note = _warnings(_query(row), label, payload)
+        if question and not confirm(_tone(question, "33")):
+            _say(f"kept {label}")
+            continue
+        if note:
+            _say(_tone(f"note  {label}: {note}", "33"))
+        hits = [hit for hit in payload if hit.lossless]
+        outcome = _save_hits(con, cfg, paths, downloader, track_id, hits)
+        if outcome.status != "acquired":
+            continue
+        new = con.execute(
+            """SELECT path FROM inbox_files
+               WHERE matched_track_id = ? AND status = 'filed' AND id != ?
+               ORDER BY id DESC LIMIT 1""",
+            (track_id, row["file_id"]),
+        ).fetchone()
+        con.execute(
+            "UPDATE inbox_files SET status = 'replaced' WHERE id = ?",
+            (row["file_id"],),
+        )
+        con.execute("UPDATE tracks SET quality = 'lossless' WHERE id = ?", (track_id,))
+        con.commit()
+        if new is not None and old.is_file() and old != Path(new["path"]):
+            old.unlink()
+        replaced += 1
+    return replaced
 
 
 def grab_spotify(con, cfg: DownloadConfig, paths: Paths, downloader, url: str, lookup=lookup_spotify) -> Outcome:
@@ -354,7 +451,7 @@ def _paint(labels: list[str], checked: list[bool], cursor: int, redraw: bool) ->
     if redraw:
         sys.stdout.write(f"\x1b[{len(labels) + 1}A")
     for index, label in enumerate(labels):
-        sys.stdout.write(f"\r\x1b[2K{_choice_line(label, checked[index], index == cursor)}\n")
+        sys.stdout.write(f"\r\x1b[2K{_choice_line(_shown_label(label), checked[index], index == cursor)}\n")
     sys.stdout.write(f"\r\x1b[2K{_tone('space toggles, enter downloads', '2')}\n")
     sys.stdout.flush()
 
@@ -380,26 +477,56 @@ def _review_rows(con, cfg, paths, downloader, job_id: int, rows, skipped: list[s
     offers = []
     if pending:
         _say(_tone(f"searching {len(pending)}", "2"))
+        queries = [search_query(artist, title) for _track_id, _label, artist, title, _mix, _duration in pending]
+        soulseek = getattr(downloader, "soulseek", None)
 
         def scan(item):
             track_id, label, artist, title, mix, duration_s = item
             track = {"artist": artist, "title": title, "mix": mix, "duration_s": duration_s}
-            status, payload = _match_track(downloader, track)
-            return track_id, label, _query(track), status, payload
+            found, error = _web_found(downloader, track)
+            return track_id, label, track, found, error
 
-        with ThreadPoolExecutor(max_workers=4) as pool:
-            scanned = list(pool.map(scan, pending))
-        # Searches ran in parallel above; prompts run here one at a time.
+        soul_future = None
+        soul_pool = ThreadPoolExecutor(max_workers=1) if soulseek is not None else None
+        try:
+            if soul_pool is not None:
+                soul_future = soul_pool.submit(_soul_sets, soulseek, queries)
+            with ThreadPoolExecutor(max_workers=4) as pool:
+                scanned_web = list(pool.map(scan, pending))
+            soul_sets = soul_future.result() if soul_future is not None else []
+        finally:
+            if soul_pool is not None:
+                soul_pool.shutdown()
+        scanned = []
+        for index, (track_id, label, track, found, error) in enumerate(scanned_web):
+            if index < len(soul_sets):
+                found = [*found, *soul_sets[index]]
+            status, payload = _from_found(track, found, error)
+            scanned.append((track_id, label, _query(track), status, payload))
+        misses = []
+        ready = []
         for track_id, label, query, status, payload in scanned:
-            if status == "ready":
-                declined = _vet(query, label, payload)
-                if declined:
-                    status, payload = "none", (declined, payload)
             if status != "ready":
-                message = payload[0]
-                _say(_tone(f"{message}  {label}", "33"))
+                misses.append((payload[0], label))
+                continue
+            ready.append((track_id, label, query, payload, _warnings(query, label, payload)))
+        for message, label in misses:
+            _say(_tone(f"{message}  {label}", "33"))
+            skipped.append(f"{label}: {message}")
+        for track_id, label, _query_row, _payload, (question, note) in ready:
+            if not question and note:
+                _say(_tone(f"note  {label}: {note}", "33"))
+        for _track_id, label, query, payload, (question, _note) in ready:
+            if question:
+                _say(_tone(question.removesuffix(" download anyway?"), "33"))
+        for track_id, label, query, payload, (question, note) in ready:
+            if question and not ask(_tone(question, "33")):
+                best = payload[0]
+                message = f"length {_mmss(best.duration_s)} vs {_mmss(query.duration_s)}, declined"
                 skipped.append(f"{label}: {message}")
                 continue
+            if question and note:
+                _say(_tone(f"note  {label}: {note}", "33"))
             offers.append((track_id, label, payload))
     filed = 0
     failed: list[str] = []
@@ -457,7 +584,13 @@ def run_playlist(
     confirm=None,
 ) -> Outcome:
     if listing is None:
-        listing = list_spotify_playlist
+
+        def listing(url):
+            return list_spotify_playlist(
+                url,
+                client_id=cfg.spotify_client_id,
+                client_secret=cfg.spotify_client_secret,
+            )
     if spotify_playlist_id(url) or spotify_album_id(url):
         return _run_spotify_playlist(con, cfg, paths, downloader, url, listing, confirm)
     job_id = add_job(con, None, "playlist")

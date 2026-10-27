@@ -27,7 +27,7 @@ No free link: if the same artist, title, and mix are already filed and the file 
 
 `djgrab <playlist-url>` downloads each entry of a YouTube playlist, a SoundCloud set, or any URL with `/playlist`. Each entry URL is filed the same way as a web single. No search, no match, no cutting. An entry with no URL is skipped and recorded on the playlist job. One entry failing does not stop the others.
 
-`djgrab <spotify-playlist-url>` reads the public embed track list. Each `spotify:track` entry is stored as a keeper with a blank genre and searched the same way as a Spotify track link. The Spotify URL is not downloaded. An entry that is not a track is skipped and named on the playlist job. The embed page is the whole list. One entry failing does not stop the others. The parent job reports how many were filed and which were skipped or not acquired.
+`djgrab <spotify-playlist-url>` reads the public embed track list. When Spotify credentials are set, the playlist or album tracks API is the list instead, and a failed API call keeps the embed list. Each `spotify:track` entry is stored as a keeper with a blank genre and searched the same way as a Spotify track link. The Spotify URL is not downloaded. An entry that is not a track is skipped and named on the playlist job. One entry failing does not stop the others. The parent job reports how many were filed and which were skipped or not acquired.
 
 ### Set
 
@@ -72,8 +72,12 @@ SQLite `~/.djgrab/djgrab.sqlite`.
 ## Commands
 
 - `djgrab doctor` — `yt-dlp` and `ffmpeg` are required. `flac` and `fpcalc` are reported and do not block this build. Missing required tools include an install line.
-- `djgrab <url>` — download that link. A word that is not `doctor`, `clear`, or a URL is refused. The database stays inside the tool.
+- `djgrab <url>` — download that link. A word that is not `doctor`, `clear`, `migrate`, `buylist`, `upgrade`, `rekordbox`, or a URL is refused. The database stays inside the tool.
 - `djgrab clear` — delete the database. Song files stay.
+- `djgrab migrate` — move OfflineDJ songs that are not already in the library.
+- `djgrab buylist` — list tracks with no file. `djgrab buylist retry` searches them again.
+- `djgrab upgrade` — replace a lossy file when a lossless match is found.
+- `djgrab rekordbox` — write `rekordbox.xml` for Rekordbox to import. One playlist per genre folder.
 
 ## Binaries
 

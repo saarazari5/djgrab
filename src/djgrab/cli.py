@@ -9,7 +9,10 @@ from pathlib import Path
 from djgrab.acquire.webdl import DownloadError, doctor_report
 from djgrab.config import Paths, config_path, load_config, set_config
 from djgrab.db import clear_db, connect
-from djgrab.service import download_link, make_downloader
+from djgrab.inbox import retag_library
+from djgrab.migrate import migrate_offlinedj, offlinedj_folder
+from djgrab.rekordbox import write_rekordbox
+from djgrab.service import buy_list, download_link, grab, make_downloader, upgrade_library
 
 
 def _import_legacy_database(root: Path) -> None:
@@ -75,6 +78,59 @@ def main(argv: list[str] | None = None) -> int:
     if args.link == ["clear"]:
         clear_db(paths.db)
         print(f"deleted {paths.db}")
+        return 0
+
+    if args.link == ["retag"]:
+        cfg = load_config(args.config)
+        con = connect(paths.db)
+        print(f"tagged {retag_library(con, cfg)}")
+        return 0
+
+    if args.link[0] == "buylist":
+        if args.link not in (["buylist"], ["buylist", "retry"]):
+            print("usage: djgrab buylist [retry]", file=sys.stderr)
+            return 2
+        cfg = load_config(args.config)
+        con = connect(paths.db)
+        rows = buy_list(con)
+        if not rows:
+            print("buy list empty")
+            return 0
+        if args.link == ["buylist", "retry"]:
+            downloader = make_downloader(cfg)
+            worst = 0
+            for row in rows:
+                outcome = grab(con, cfg, paths, downloader, int(row["id"]))
+                print(f"{outcome.status}: {outcome.message}")
+                worst = max(worst, _exit_for(outcome.status))
+            return worst
+        for row in rows:
+            print(f"buylist: {row['artist']} - {row['title']}")
+        print(f"{len(rows)} on the buy list")
+        return 0
+
+    if args.link == ["upgrade"]:
+        cfg = load_config(args.config)
+        con = connect(paths.db)
+        replaced = upgrade_library(con, cfg, paths, make_downloader(cfg))
+        print(f"replaced {replaced}")
+        return 0
+
+    if args.link == ["rekordbox"]:
+        count, dest = write_rekordbox(paths.library)
+        print(f"wrote {count} tracks to {dest}")
+        return 0
+
+    if args.link == ["migrate"]:
+        source = offlinedj_folder()
+        if source is None:
+            print("offlineDJ library not found", file=sys.stderr)
+            return 2
+        con = connect(paths.db)
+        moved, skipped, dupes = migrate_offlinedj(con, paths.library, source)
+        print(
+            f"moved {moved} from {source}, skipped {skipped} already in djgrab, skipped {dupes} duplicates"
+        )
         return 0
 
     refused = [url for url in args.link if not _is_link(url)]

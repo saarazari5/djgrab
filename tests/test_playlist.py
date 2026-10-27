@@ -3,7 +3,7 @@ from pathlib import Path
 from djgrab.acquire.webdl import DownloadError, WebCandidate, parse_dump
 from djgrab.db import add_track, get_track
 from djgrab.service import _choice_line, _move, _tone, grab, run_playlist
-from tests.support import FakeDL, cfg, db, paths
+from tests.support import FakeDL, cfg, db, paths, write_wav
 
 FIXTURE = Path(__file__).parent / "fixtures" / "playlist.json"
 
@@ -134,6 +134,53 @@ def test_big_length_gap_asks_once_per_track_after_the_search(tmp_path, monkeypat
     assert "note  Nova Ridge - Solar Drift: wanted 'original', got 'Club Mix'" in capsys.readouterr().out
 
 
+def test_playlist_soulseek_searches_the_list_in_one_batch(tmp_path):
+    solar = WebCandidate("youtube", "https://example.test/solar", "Nova Ridge - Solar Drift", "", 180)
+    night = WebCandidate("youtube", "https://example.test/night", "Low Tide - Night Bus", "", 200)
+    flac = WebCandidate(
+        "soulseek",
+        "peer\x1fsolar.wav",
+        "Nova Ridge - Solar Drift.wav",
+        "peer",
+        180,
+        lossless=True,
+    )
+
+    class Soul:
+        def __init__(self):
+            self.batches: list[list[str]] = []
+            self.fetches: list[str] = []
+
+        def search_batch(self, queries):
+            self.batches.append(list(queries))
+            return [[flac], []]
+
+        def fetch(self, url, dest):
+            self.fetches.append(url)
+            dest.mkdir(parents=True, exist_ok=True)
+            path = dest / "audio.wav"
+            write_wav(path, 0.2, 440)
+            return path
+
+    downloader = FakeDL(candidates=[solar, night])
+    downloader.soulseek = Soul()
+    outcome = run_playlist(
+        db(tmp_path),
+        cfg(),
+        paths(tmp_path),
+        downloader,
+        SPOTIFY,
+        listing=_listing(
+            [("Nova Ridge", "Solar Drift", 180.0), ("Low Tide", "Night Bus", 200.0)]
+        ),
+        confirm=lambda labels: list(range(len(labels))),
+    )
+    assert downloader.soulseek.batches == [["Nova Ridge Solar Drift", "Low Tide Night Bus"]]
+    assert downloader.soulseek.fetches == ["peer\x1fsolar.wav"]
+    assert downloader.fetches == ["https://example.test/night"]
+    assert outcome.status == "acquired"
+
+
 def test_unchecked_song_is_not_fetched(tmp_path):
     con = db(tmp_path)
     solar = WebCandidate("youtube", "https://example.test/solar", "Nova Ridge - Solar Drift", "", 180)
@@ -177,6 +224,43 @@ def test_enter_keeps_every_song(tmp_path):
     )
     assert outcome.status == "acquired"
     assert sorted(downloader.fetches) == ["https://example.test/night", "https://example.test/solar"]
+
+
+def test_length_warnings_show_together_before_the_first_answer(tmp_path, monkeypatch, capsys):
+    solar = WebCandidate("youtube", "https://example.test/solar", "Nova Ridge - Solar Drift", "", 240)
+    night = WebCandidate("youtube", "https://example.test/night", "Low Tide - Night Bus", "", 400)
+    downloader = FakeDL(candidates=[solar, night])
+    seen = []
+
+    def ask(question):
+        seen.append(capsys.readouterr().out)
+        return False
+
+    monkeypatch.setattr("djgrab.service.ask", ask)
+    run_playlist(
+        db(tmp_path),
+        cfg(),
+        paths(tmp_path),
+        downloader,
+        SPOTIFY,
+        listing=_listing([("Nova Ridge", "Solar Drift", 180.0), ("Low Tide", "Night Bus", 200.0)]),
+        confirm=lambda labels: [],
+    )
+    assert "Solar Drift" in seen[0]
+    assert "Night Bus" in seen[0]
+    assert downloader.fetches == []
+
+
+def test_a_long_row_stays_on_one_line(monkeypatch):
+    import os
+
+    from djgrab.service import _shown_label
+
+    monkeypatch.setattr(
+        "djgrab.service.shutil.get_terminal_size",
+        lambda fallback=(80, 24): os.terminal_size((20, 24)),
+    )
+    assert _shown_label("Mahoota, Mark Khoza, Uncool MC, Candy Flow") == "Mahoota, Mark…"
 
 
 def test_checklist_colors_separate_owned_songs_from_choices(monkeypatch):

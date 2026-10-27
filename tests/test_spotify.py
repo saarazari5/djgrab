@@ -64,6 +64,89 @@ def test_mixed_album_titles_lose_the_suffix_and_duration():
     assert tracks_from_playlist_embed(mixed)[0][0] == ("Nova Ridge", "Solar Drift", 0)
 
 
+def _api_item(title, artist, duration_ms, nested=True):
+    track = {
+        "type": "track",
+        "name": title,
+        "duration_ms": duration_ms,
+        "artists": [{"name": artist}],
+    }
+    return {"track": track} if nested else track
+
+
+def test_credentials_store_the_longer_api_list(tmp_path, monkeypatch):
+    def transport(url, data=None, headers=None):
+        if data is not None:
+            return '{"access_token":"tok"}'
+        if "embed" in url:
+            return PLAYLIST
+        if "offset=100" in url:
+            return json.dumps({"items": [_api_item("Last", "End", 120000)], "next": None})
+        if "/playlists/" in url:
+            return json.dumps(
+                {
+                    "items": [
+                        _api_item("Solar Drift", "Nova Ridge", 180000),
+                        _api_item("Night Bus", "Low Tide", 200000),
+                        _api_item("Extra", "More", 100000),
+                    ],
+                    "next": "https://api.spotify.com/v1/playlists/abc/tracks?offset=100",
+                }
+            )
+        if "/albums/" in url:
+            return json.dumps(
+                {
+                    "items": [
+                        _api_item("Album One", "A", 100000, nested=False),
+                        _api_item("Album Two", "B", 110000, nested=False),
+                        _api_item("Album Three", "C", 120000, nested=False),
+                    ],
+                    "next": None,
+                }
+            )
+        raise AssertionError(url)
+
+    monkeypatch.setattr("djgrab.acquire.spotify._request", transport)
+    from djgrab.service import run_playlist
+
+    run_playlist(
+        db(tmp_path),
+        cfg(spotify_client_id="ply", spotify_client_secret="sec"),
+        paths(tmp_path),
+        FakeDL(),
+        "https://open.spotify.com/playlist/abc",
+    )
+    titles = [row["title"] for row in db(tmp_path).execute("SELECT title FROM tracks ORDER BY id")]
+    assert titles == ["Solar Drift", "Night Bus", "Extra", "Last"]
+
+    embed_only, _skipped = list_spotify_playlist(
+        "https://open.spotify.com/playlist/abc",
+        transport=transport,
+    )
+    assert [title for _artist, title, _duration in embed_only] == ["Solar Drift", "Night Bus"]
+
+    album, _skipped = list_spotify_playlist(
+        "https://open.spotify.com/album/abc",
+        transport=transport,
+        client_id="alb",
+        client_secret="sec",
+    )
+    assert [title for _artist, title, _duration in album] == ["Album One", "Album Two", "Album Three"]
+
+    def broken(url, data=None, headers=None):
+        if "embed" in url:
+            return PLAYLIST
+        raise DownloadError("down")
+
+    failed, _skipped = list_spotify_playlist(
+        "https://open.spotify.com/playlist/abc",
+        transport=broken,
+        client_id="bad",
+        client_secret="sec",
+    )
+    assert [title for _artist, title, _duration in failed] == ["Solar Drift", "Night Bus"]
+
+
 def test_playlist_embed_keeps_tracks_and_names_other_entries():
     tracks, skipped = tracks_from_playlist_embed(PLAYLIST)
     assert tracks == [("Nova Ridge", "Solar Drift", 180.0), ("Low Tide", "Night Bus", 200.0)]

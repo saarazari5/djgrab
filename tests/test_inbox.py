@@ -24,6 +24,7 @@ def test_blank_genre_uses_artist_search(tmp_path, monkeypatch):
     )
     assert dest.parent.name == "Psy"
     assert con.execute("SELECT genre FROM tracks WHERE id = ?", (track_id,)).fetchone()["genre"] == "psytrance"
+    assert "Psy" in _tag(dest, "genre")
 
 
 def test_preset_track_files_as_lossy_web(tmp_path):
@@ -54,6 +55,67 @@ def test_preset_track_files_as_lossy_web(tmp_path):
         text=True,
     )
     assert "Solar Drift" in probe.stdout
+
+
+def _tag(path, key: str) -> str:
+    probe = subprocess.run(
+        ["ffprobe", "-v", "error", "-show_entries", f"format_tags={key}", "-of", "default=nw=1", str(path)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return probe.stdout
+
+
+def test_retag_writes_genre_and_mix_onto_an_existing_file(tmp_path, monkeypatch):
+    from djgrab.cli import main
+    from djgrab.config import DownloadConfig
+    from djgrab.inbox import file_staged, retag_library
+
+    monkeypatch.setattr("djgrab.inbox.genre_for_artist", lambda *args, **kwargs: "Trance")
+    con = db(tmp_path)
+    track_id = add_track(con, artist="Shtuby", title="Dreamer", mix="Extended Mix", duration_s=180)
+    staged = tmp_path / "staged.wav"
+    write_wav(staged, 0.2, 440)
+    dest = file_staged(
+        con,
+        staged,
+        track_id,
+        via="web",
+        quality="lossy",
+        library=paths(tmp_path).library,
+        cfg=DownloadConfig(),
+    )
+    assert "Extended Mix" in _tag(dest, "title")
+    con.execute("UPDATE tracks SET genre = '' WHERE id = ?", (track_id,))
+    con.commit()
+    assert retag_library(con, DownloadConfig()) == 1
+    assert "Trance" in _tag(dest, "genre")
+    assert main(["retag", "--data", str(tmp_path)]) == 0
+
+
+def test_wav_with_an_embedded_cover_still_tags(tmp_path):
+    from djgrab.inbox import tag_audio
+
+    wav = tmp_path / "tone.wav"
+    write_wav(wav, 0.2, 440)
+    cover = tmp_path / "cover.jpg"
+    subprocess.run(
+        ["ffmpeg", "-y", "-f", "lavfi", "-i", "color=c=red:s=16x16", "-frames:v", "1", str(cover)],
+        check=True,
+        capture_output=True,
+    )
+    src = tmp_path / "with-cover.nut"
+    subprocess.run(
+        ["ffmpeg", "-y", "-i", str(wav), "-i", str(cover), "-map", "0:a", "-map", "1:v", "-c", "copy", "-disposition:v:0", "attached_pic", str(src)],
+        check=True,
+        capture_output=True,
+    )
+    dest = tmp_path / "Anita Ward - Ring My Bell.wav"
+    tag_audio(src, dest, "Anita Ward", "Ring My Bell", "Disco")
+    assert dest.is_file()
+    assert "Ring My Bell" in _tag(dest, "title")
+    assert "Disco" in _tag(dest, "genre")
 
 
 def test_tag_audio_embeds_a_cover(tmp_path):

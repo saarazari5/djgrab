@@ -51,7 +51,6 @@ def spotify_album_id(url: str) -> str | None:
 
 
 def tracks_from_playlist_embed(html: str) -> tuple[list[tuple[str, str, float]], list[str]]:
-    # shortcut: embed trackList is one page, use the playlist tracks API when a list is cut off
     items = _entity(html).get("trackList") or []
     tracks: list[tuple[str, str, float]] = []
     skipped: list[str] = []
@@ -138,20 +137,77 @@ def _request(url: str, data: bytes | None = None, headers: dict | None = None) -
         raise DownloadError(f"spotify lookup failed: {exc}") from exc
 
 
+def _api_track(item: dict) -> tuple[str, str, float] | None:
+    track = item.get("track") if "track" in item else item
+    if not isinstance(track, dict) or track.get("is_local"):
+        return None
+    if track.get("type") not in (None, "track"):
+        return None
+    title = str(track.get("name") or "").strip()
+    names = [
+        str(artist.get("name"))
+        for artist in track.get("artists") or []
+        if isinstance(artist, dict) and artist.get("name")
+    ]
+    try:
+        duration_s = float(track["duration_ms"]) / 1000
+    except (KeyError, TypeError, ValueError):
+        return None
+    if not title or duration_s <= 0:
+        return None
+    return (", ".join(names) or "Unknown", *unmixed(title, duration_s))
+
+
+def _api_tracks(start: str, client_id: str, client_secret: str, transport) -> list[tuple[str, str, float]] | None:
+    try:
+        token = _access_token(client_id, client_secret, transport)
+    except (DownloadError, KeyError, TypeError, json.JSONDecodeError):
+        return None
+    tracks: list[tuple[str, str, float]] = []
+    seen: set[str] = set()
+    page_url = start
+    while page_url and page_url not in seen:
+        seen.add(page_url)
+        try:
+            body = transport(page_url, headers={"Authorization": f"Bearer {token}"})
+            page = json.loads(body)
+            items = page.get("items") or []
+        except (DownloadError, TypeError, json.JSONDecodeError):
+            return None
+        for item in items:
+            if isinstance(item, dict):
+                parsed = _api_track(item)
+                if parsed:
+                    tracks.append(parsed)
+        page_url = page.get("next") or ""
+    return tracks
+
+
 def list_spotify_playlist(
     url: str,
-    transport=_request,
+    transport=None,
+    client_id: str = "",
+    client_secret: str = "",
 ) -> tuple[list[tuple[str, str, float]], list[str]]:
+    transport = transport or _request
     playlist_id = spotify_playlist_id(url)
     album_id = spotify_album_id(url)
     if playlist_id:
         page = f"https://open.spotify.com/embed/playlist/{playlist_id}"
+        api = f"https://api.spotify.com/v1/playlists/{playlist_id}/tracks?limit=100"
     elif album_id:
         page = f"https://open.spotify.com/embed/album/{album_id}"
+        api = f"https://api.spotify.com/v1/albums/{album_id}/tracks?limit=50"
     else:
         raise DownloadError("not a spotify playlist url")
     html = transport(page)
-    return tracks_from_playlist_embed(html)
+    embed_tracks, skipped = tracks_from_playlist_embed(html)
+    if not client_id or not client_secret:
+        return embed_tracks, skipped
+    api_tracks = _api_tracks(api, client_id, client_secret, transport)
+    if api_tracks:
+        return api_tracks, []
+    return embed_tracks, skipped
 
 
 _tokens: dict[str, str] = {}

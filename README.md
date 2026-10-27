@@ -11,18 +11,17 @@ You are responsible for what you download.
 ## Install
 
 ```bash
-brew tap saarazari5/djgrab https://github.com/saarazari5/djgrab
-brew install --HEAD saarazari5/djgrab/djgrab
-djgrab doctor
+uv sync
+uv run djgrab doctor
 ```
 
 `doctor` checks that `yt-dlp` and `ffmpeg` are installed. Quote URLs in zsh.
 
 ```bash
-djgrab "https://www.youtube.com/watch?v=..."
+uv run djgrab "https://www.youtube.com/watch?v=..."
 ```
 
-Songs go to `~/djgrab/`. The database stays in `~/.djgrab/`. Update with `brew upgrade djgrab`.
+Songs go to `~/djgrab/`. The database stays in `~/.djgrab/`.
 
 ## Commands
 

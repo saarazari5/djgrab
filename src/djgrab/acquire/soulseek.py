@@ -50,11 +50,19 @@ class SoulseekSource:
         self._ready = threading.Lock()
 
     def search(self, query: str) -> list[WebCandidate]:
-        try:
-            results = self._call(self._search(query))
-        except Exception as exc:
-            raise DownloadError(str(exc)) from exc
-        return candidates_from_results(results)
+        found = self.search_batch([query])
+        return found[0] if found else []
+
+    def search_batch(self, queries: list[str]) -> list[list[WebCandidate]]:
+        grouped: list[list[WebCandidate]] = []
+        for start in range(0, len(queries), 4):
+            chunk = queries[start : start + 4]
+            try:
+                result_sets = self._call(self._search_many(chunk))
+            except Exception as exc:
+                raise DownloadError(str(exc) or "soulseek failed") from exc
+            grouped.extend(candidates_from_results(results) for results in result_sets)
+        return grouped
 
     def fetch(self, url: str, dest_dir: Path) -> Path:
         username, filename = url.split("\x1f", 1)
@@ -98,11 +106,13 @@ class SoulseekSource:
         await client.login()
         self._client = client
 
-    async def _search(self, query: str):
+    async def _search_many(self, queries: list[str]):
         assert self._client is not None
-        request = await self._client.searches.search(query)
+        requests = []
+        for query in queries:
+            requests.append(await self._client.searches.search(query))
         await asyncio.sleep(_WAIT_S)
-        return list(request.results)
+        return [list(request.results) for request in requests]
 
     async def _fetch(self, username: str, filename: str, dest_dir: Path) -> Path:
         assert self._client is not None

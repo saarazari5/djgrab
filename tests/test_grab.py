@@ -149,6 +149,30 @@ def test_stalled_soulseek_tries_the_next_hit(tmp_path):
     assert downloader.fetches == ["https://www.youtube.com/watch?v=better"]
 
 
+def test_four_soulseek_queries_wait_once(monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+
+    import djgrab.acquire.soulseek as soulseek_mod
+    from djgrab.acquire.soulseek import SoulseekSource
+
+    sleeps: list[float] = []
+
+    async def sleep(seconds):
+        sleeps.append(seconds)
+
+    class Searches:
+        async def search(self, query):
+            return SimpleNamespace(results=[])
+
+    monkeypatch.setattr(soulseek_mod.asyncio, "sleep", sleep)
+    source = SoulseekSource("u", "p")
+    source._client = SimpleNamespace(searches=Searches())
+    asyncio.run(source._search_many(["a", "b", "c", "d"]))
+    asyncio.run(source._search_many(["e"]))
+    assert sleeps == [8, 8]
+
+
 def test_soulseek_gives_up_when_the_peer_sends_nothing():
     from djgrab.acquire.soulseek import _idle_error
 

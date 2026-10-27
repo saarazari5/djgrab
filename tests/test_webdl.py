@@ -1,5 +1,28 @@
-from djgrab.acquire.webdl import DownloadError, YtDlpDownloader, doctor_report
+import sys
+
+from djgrab.acquire.webdl import DownloadError, YtDlpDownloader, default_runner, doctor_report
 from djgrab.config import DownloadConfig
+
+
+def test_a_successful_download_does_not_print_yt_dlp_errors(capsys):
+    out = default_runner(
+        [sys.executable, "-c", "import sys; sys.stderr.write('ERROR: HTTP Error 403: Forbidden\\n'); print('ok')"],
+        10,
+    )
+    assert out.strip() == "ok"
+    assert "403" not in capsys.readouterr().err
+
+
+def test_a_failed_download_keeps_the_yt_dlp_error():
+    try:
+        default_runner(
+            [sys.executable, "-c", "import sys; sys.stderr.write('ERROR: HTTP Error 403: Forbidden\\n'); raise SystemExit(1)"],
+            10,
+        )
+    except DownloadError as exc:
+        assert "403" in str(exc)
+    else:
+        raise AssertionError("expected DownloadError")
 
 
 def test_retries_then_returns_dump():
@@ -46,12 +69,13 @@ def test_search_queries_each_source():
     seen: list[str] = []
 
     def runner(args, timeout):
-        seen.append(args[1])
+        seen.append(args)
         return '{"title": "Nova Ridge - Solar Drift", "webpage_url": "https://example.test/a", "duration": 180}\n'
 
     downloader = YtDlpDownloader(DownloadConfig(), runner=runner, sleeper=lambda _delay: None)
     found = downloader.search_meta("Nova Ridge", 5)
-    assert set(seen) == {"ytsearch5:Nova Ridge", "scsearch5:Nova Ridge"}
+    assert {args[1] for args in seen} == {"ytsearch5:Nova Ridge", "scsearch5:Nova Ridge"}
+    assert all("--flat-playlist" in args for args in seen)
     assert len(found) == 2
 
 

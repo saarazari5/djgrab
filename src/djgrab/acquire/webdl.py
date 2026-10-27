@@ -80,7 +80,7 @@ def default_runner(args: list[str], timeout: float) -> str:
             args,
             check=False,
             stdout=subprocess.PIPE,
-            stderr=None,
+            stderr=subprocess.PIPE,
             text=True,
             timeout=timeout,
         )
@@ -89,7 +89,8 @@ def default_runner(args: list[str], timeout: float) -> str:
     except subprocess.TimeoutExpired as exc:
         raise DownloadError("yt-dlp timed out") from exc
     if proc.returncode != 0:
-        detail = (proc.stdout or "").strip()
+        lines = [line.strip() for line in (proc.stderr or "").splitlines() if line.strip()]
+        detail = lines[-1] if lines else (proc.stdout or "").strip()
         raise DownloadError(detail or f"yt-dlp exited {proc.returncode}")
     return proc.stdout
 
@@ -132,7 +133,7 @@ class YtDlpDownloader:
     def _search_source(self, source: str, query: str, limit: int) -> list[WebCandidate]:
         prefix = "ytsearch" if source == "youtube" else "scsearch"
         stdout = self._attempt(
-            ["yt-dlp", f"{prefix}{limit}:{query}", "--dump-json", "--no-warnings"],
+            ["yt-dlp", f"{prefix}{limit}:{query}", "--flat-playlist", "--dump-json", "--no-warnings"],
             SEARCH_TIMEOUT,
         )
         return parse_dump(stdout, source)

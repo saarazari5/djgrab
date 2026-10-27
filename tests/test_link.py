@@ -19,7 +19,7 @@ def test_link_kind_sorts_tracks_playlists_and_videos():
 def test_an_album_link_searches_songs_and_skips_yt_dlp(tmp_path, monkeypatch):
     monkeypatch.setattr(
         "djgrab.service.list_spotify_playlist",
-        lambda url: ([("Shtuby", "Dreamer", 627.0)], []),
+        lambda url, **_kwargs: ([("Shtuby", "Dreamer", 627.0)], []),
     )
 
     class DL(FakeDL):
